@@ -1018,12 +1018,15 @@ window.archiveTrip = async (id) => {
 function calcBalance(){
   let herPaid=0,himPaid=0,himOwesTotal=0;
   state.expenses.forEach(e=>{if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;himOwesTotal+=e.himOwes||0;});
-  let diff=himOwesTotal-himPaid;
-  state.settlements.forEach(s=>{diff-=s.amount;});
-  let depositBalance=0;
-  state.deposits.forEach(d=>{depositBalance+=d.amount;});
-  depositBalance-=herPaid;
-  return{herPaid,himPaid,total:herPaid+himPaid,diff,depositBalance};
+  let totalDeposit=0;
+  state.deposits.forEach(d=>{totalDeposit+=d.amount;});
+  // 正數 = 他還欠你；負數 = 他多給你（你手上還有他的錢）
+  // 他應付 - 他實際付 - 他的預付金 + 已還款抵消
+  let diff=himOwesTotal-himPaid-totalDeposit;
+  state.settlements.forEach(s=>{diff+=s.amount;});
+  // 預付金餘額：他給的錢 - 你實際花掉的（你付出的所有）
+  const depositBalance=totalDeposit-herPaid;
+  return{herPaid,himPaid,total:herPaid+himPaid,diff,depositBalance,totalDeposit};
 }
 
 // ── Render (daily) ────────────────────────────────────────
@@ -1037,9 +1040,19 @@ function render(){
   document.getElementById('him-pill').textContent='$'+Math.round(himPaid).toLocaleString();
   document.getElementById('total-pill').textContent='$'+Math.round(total).toLocaleString();
   const chip=document.getElementById('balance-chip');
-  if(Math.abs(diff)<1){chip.className='balance-chip even';chip.textContent='✓ 平衡';document.getElementById('balance-main').textContent='$0';document.getElementById('balance-sub').textContent='目前不需還款';}
-  else if(diff>0){chip.className='balance-chip owe';chip.textContent=him+' 欠 '+her;document.getElementById('balance-main').textContent='$'+Math.round(diff).toLocaleString();document.getElementById('balance-sub').textContent=him+' 需還給 '+her;}
-  else{chip.className='balance-chip owed';chip.textContent=her+' 欠 '+him;document.getElementById('balance-main').textContent='$'+Math.round(Math.abs(diff)).toLocaleString();document.getElementById('balance-sub').textContent=her+' 需還給 '+him;}
+  if(Math.abs(diff)<1){
+    chip.className='balance-chip even';chip.textContent='✓ 平衡';
+    document.getElementById('balance-main').textContent='$0';
+    document.getElementById('balance-sub').textContent='目前不需還款';
+  } else if(diff>0){
+    chip.className='balance-chip owe';chip.textContent=him+' 欠 '+her;
+    document.getElementById('balance-main').textContent='$'+Math.round(diff).toLocaleString();
+    document.getElementById('balance-sub').textContent=him+' 需還給 '+her;
+  } else {
+    chip.className='balance-chip owed';chip.textContent='持有 '+him+' 的錢';
+    document.getElementById('balance-main').textContent='$'+Math.round(Math.abs(diff)).toLocaleString();
+    document.getElementById('balance-sub').textContent=her+' 手上還有 '+him+' 的預付金';
+  }
   const depEl=document.getElementById('deposit-val');
   depEl.textContent='$'+Math.round(depositBalance).toLocaleString();
   depEl.className='val '+(depositBalance>=0?'positive':'negative');
