@@ -353,6 +353,22 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
     <div class="settings-row"><label>她的名字</label><input class="form-input" id="her-name-input" placeholder="佩璽" oninput="saveSettings()"></div>
     <div class="settings-row"><label>他的名字</label><input class="form-input" id="him-name-input" placeholder="男友" oninput="saveSettings()"></div>
   </div>
+
+  <div style="padding:16px 16px 0">
+    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:6px">AI 收據辨識</div>
+    <div style="font-size:.72rem;color:var(--ink-light);margin-bottom:10px">API Key 只存在你的裝置，不會上傳。有效期過後清除即可。</div>
+  </div>
+  <div class="settings-section">
+    <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+      <label>Anthropic API Key</label>
+      <div style="display:flex;gap:8px;width:100%">
+        <input class="form-input" id="api-key-input" type="password" placeholder="sk-ant-..." style="flex:1;font-family:'DM Mono',monospace;font-size:.82rem">
+        <button onclick="saveApiKey()" style="padding:10px 16px;background:var(--ink);color:#fff;border:none;border-radius:10px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer;white-space:nowrap">儲存</button>
+      </div>
+      <div id="api-key-status" style="font-size:.7rem;font-family:'DM Mono',monospace;color:var(--ink-light)"></div>
+      <button onclick="clearApiKey()" style="background:none;border:1.5px solid var(--border);color:var(--ink-light);border-radius:8px;padding:7px 14px;font-size:.75rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer">清除 API Key</button>
+    </div>
+  </div>
 </div>
 
 </div><!-- /app -->
@@ -362,9 +378,44 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
 <div class="modal-overlay" id="modal-add">
   <div class="modal">
     <div class="modal-handle"></div>
-    <div class="modal-header"><span class="modal-title">新增消費</span><button class="modal-close" onclick="closeModal('modal-add')">✕</button></div>
+    <div class="modal-header">
+      <span class="modal-title">新增消費</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="openReceiptScan()" style="padding:6px 12px;background:var(--travel-bg);color:var(--travel);border:1.5px solid var(--travel);border-radius:8px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer">📷 拍收據</button>
+        <button class="modal-close" onclick="closeModal('modal-add')">✕</button>
+      </div>
+    </div>
     <div class="modal-body" id="modal-add-body">
       <!-- filled by buildExpenseForm() -->
+    </div>
+  </div>
+</div>
+
+<!-- Receipt Scan Modal -->
+<div class="modal-overlay" id="modal-receipt">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header"><span class="modal-title">📷 拍收據辨識</span><button class="modal-close" onclick="closeModal('modal-receipt')">✕</button></div>
+    <div class="modal-body">
+      <div id="receipt-upload-area" style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;margin-bottom:16px" onclick="document.getElementById('receipt-file-input').click()">
+        <div style="font-size:2rem;margin-bottom:8px">📄</div>
+        <div style="font-size:.88rem;color:var(--ink-mid)">點擊選擇圖片或拍照</div>
+        <div style="font-size:.72rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace">支援 JPG、PNG、HEIC</div>
+      </div>
+      <input type="file" id="receipt-file-input" accept="image/*" capture="environment" style="display:none" onchange="handleReceiptFile(this)">
+      <div id="receipt-preview" style="display:none;margin-bottom:16px">
+        <img id="receipt-img" style="width:100%;border-radius:10px;max-height:240px;object-fit:contain;background:var(--bg)">
+      </div>
+      <div id="receipt-result" style="display:none">
+        <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">辨識結果</div>
+        <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:14px" id="receipt-result-content"></div>
+        <button class="btn-submit" onclick="applyReceiptResult()">套用到表單 ✓</button>
+      </div>
+      <div id="receipt-scanning" style="display:none;text-align:center;padding:24px">
+        <div class="spinner" style="margin:0 auto 12px;border-top-color:var(--travel)"></div>
+        <div style="font-size:.82rem;color:var(--ink-mid)">AI 辨識中…</div>
+      </div>
+      <div id="receipt-error" style="display:none;color:var(--red);font-size:.82rem;padding:12px;background:#fef2f2;border-radius:8px"></div>
     </div>
   </div>
 </div>
@@ -1109,6 +1160,16 @@ function renderStats(){
 function loadSettingsUI(){
   document.getElementById('her-name-input').value=state.settings.herName||'';
   document.getElementById('him-name-input').value=state.settings.himName||'';
+  // API key status
+  const key=localStorage.getItem('anthropic_api_key');
+  const statusEl=document.getElementById('api-key-status');
+  if(key){
+    statusEl.textContent='✓ 已設定（顯示前4碼：'+key.slice(0,12)+'…）';
+    statusEl.style.color='var(--green)';
+  } else {
+    statusEl.textContent='尚未設定';
+    statusEl.style.color='var(--ink-light)';
+  }
 }
 window.saveSettings=async()=>{
   const herName=document.getElementById('her-name-input').value||'佩璽';
@@ -1116,6 +1177,196 @@ window.saveSettings=async()=>{
   state.settings={herName,himName};
   await setDoc(doc(db,'users',currentUser.uid,'config','settings'),{herName,himName});
   render();
+};
+window.saveApiKey=()=>{
+  const key=document.getElementById('api-key-input').value.trim();
+  if(!key){showToast('請貼上 API Key');return;}
+  if(!key.startsWith('sk-ant-')){showToast('格式不對，應以 sk-ant- 開頭');return;}
+  localStorage.setItem('anthropic_api_key',key);
+  document.getElementById('api-key-input').value='';
+  loadSettingsUI();
+  showToast('API Key 已儲存 ✓');
+};
+window.clearApiKey=()=>{
+  if(!confirm('確定清除 API Key？')) return;
+  localStorage.removeItem('anthropic_api_key');
+  loadSettingsUI();
+  showToast('已清除');
+};
+
+// ── Receipt Scan ──────────────────────────────────────────
+let receiptResult = null;
+
+window.openReceiptScan=()=>{
+  const key=localStorage.getItem('anthropic_api_key');
+  if(!key){
+    showToast('請先到設定頁填入 API Key');
+    switchPage('settings');
+    return;
+  }
+  // reset
+  document.getElementById('receipt-preview').style.display='none';
+  document.getElementById('receipt-result').style.display='none';
+  document.getElementById('receipt-scanning').style.display='none';
+  document.getElementById('receipt-error').style.display='none';
+  document.getElementById('receipt-upload-area').style.display='block';
+  document.getElementById('receipt-file-input').value='';
+  receiptResult=null;
+  openModal('modal-receipt');
+};
+
+window.handleReceiptFile=async(input)=>{
+  const file=input.files[0]; if(!file) return;
+  const key=localStorage.getItem('anthropic_api_key');
+
+  // show preview
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    document.getElementById('receipt-img').src=e.target.result;
+    document.getElementById('receipt-preview').style.display='block';
+    document.getElementById('receipt-upload-area').style.display='none';
+  };
+  reader.readAsDataURL(file);
+
+  // show scanning
+  document.getElementById('receipt-scanning').style.display='block';
+  document.getElementById('receipt-result').style.display='none';
+  document.getElementById('receipt-error').style.display='none';
+
+  try {
+    // convert to base64
+    const base64=await new Promise((res,rej)=>{
+      const r=new FileReader();
+      r.onload=()=>res(r.result.split(',')[1]);
+      r.onerror=rej;
+      r.readAsDataURL(file);
+    });
+
+    const mediaType=file.type||'image/jpeg';
+    const trip=currentTripId?state.trips.find(t=>t.id===currentTripId):null;
+    const mainCur=trip?.mainCur||'TWD';
+
+    const prompt=`你是一個收據辨識助理。請分析這張收據圖片，回傳 JSON 格式，不要有任何其他文字。
+
+格式如下：
+{
+  "amount": 數字（原始金額，不含匯率換算）,
+  "currency": "JPY" 或 "TWD" 或 "USD"（根據收據判斷，預設 ${mainCur}）,
+  "date": "YYYY-MM-DD"（若收據有日期則填入，否則填今天 ${today()}）,
+  "desc": "簡短描述（繁體中文，例如：lawson 飯糰、咖啡廳午餐）",
+  "cat": "食" 或 "住" 或 "行" 或 "購物" 或 "樂" 或 "其他",
+  "confidence": "high" 或 "low"
+}
+
+注意：
+- 金額填收據上的總金額
+- 日文收據通常是日圓（JPY）
+- 描述盡量簡短有意義
+- 無法辨識就填 confidence: "low"`;
+
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens:500,
+        messages:[{
+          role:'user',
+          content:[
+            {type:'image',source:{type:'base64',media_type:mediaType,data:base64}},
+            {type:'text',text:prompt}
+          ]
+        }]
+      })
+    });
+
+    if(!resp.ok){
+      const err=await resp.json();
+      throw new Error(err.error?.message||'API 錯誤');
+    }
+
+    const data=await resp.json();
+    const text=data.content[0].text.trim();
+    const clean=text.replace(/```json|```/g,'').trim();
+    receiptResult=JSON.parse(clean);
+
+    document.getElementById('receipt-scanning').style.display='none';
+    document.getElementById('receipt-result').style.display='block';
+
+    const conf=receiptResult.confidence==='high'?'✓ 辨識完成':'⚠️ 辨識信心較低，請確認';
+    const confColor=receiptResult.confidence==='high'?'var(--green)':'#f59e0b';
+    document.getElementById('receipt-result-content').innerHTML=`
+      <div style="font-size:.72rem;color:${confColor};font-family:'DM Mono',monospace;margin-bottom:10px">${conf}</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:.85rem">
+        <span style="color:var(--ink-light)">金額</span><span style="font-family:'DM Mono',monospace;font-weight:600">${receiptResult.amount?.toLocaleString()} ${receiptResult.currency}</span>
+        <span style="color:var(--ink-light)">日期</span><span style="font-family:'DM Mono',monospace">${receiptResult.date}</span>
+        <span style="color:var(--ink-light)">說明</span><span>${receiptResult.desc}</span>
+        <span style="color:var(--ink-light)">類別</span><span>${receiptResult.cat}</span>
+      </div>`;
+
+  } catch(e) {
+    document.getElementById('receipt-scanning').style.display='none';
+    document.getElementById('receipt-error').style.display='block';
+    document.getElementById('receipt-error').textContent='辨識失敗：'+e.message;
+  }
+};
+
+window.applyReceiptResult=()=>{
+  if(!receiptResult) return;
+  closeModal('modal-receipt');
+
+  // 確保表單已開啟
+  if(!document.getElementById('modal-add').classList.contains('open')){
+    openAddModal();
+  }
+
+  // 填入辨識結果
+  setTimeout(()=>{
+    // 類別
+    document.querySelectorAll('#cat-chips .chip').forEach(c=>{
+      c.classList.remove('active-cat');
+      if(c.dataset.cat===receiptResult.cat) c.classList.add('active-cat');
+    });
+    formState.cat=receiptResult.cat;
+
+    // 說明
+    const descEl=document.getElementById('desc-input');
+    if(descEl) descEl.value=receiptResult.desc||'';
+
+    // 幣別
+    const cur=receiptResult.currency||'TWD';
+    document.querySelectorAll('#cur-chips .chip').forEach(c=>{
+      c.classList.remove('active-cur');
+      if(c.dataset.cur===cur) c.classList.add('active-cur');
+    });
+    formState.currency=cur;
+    const isForeign=cur!=='TWD';
+    const rateEl=document.getElementById('rate-input');
+    const rateHint=document.getElementById('rate-hint');
+    if(rateEl) rateEl.style.display=isForeign?'block':'none';
+    if(rateHint) rateHint.style.display=isForeign?'block':'none';
+    if(isForeign && rateEl){
+      const refs={JPY:0.213,USD:32.5};
+      rateEl.value=refs[cur]||'';
+      if(rateHint) rateHint.textContent='參考匯率（1 '+cur+' = ? TWD，可修改）';
+    }
+
+    // 金額
+    const amtEl=document.getElementById('amount-input');
+    if(amtEl) amtEl.value=receiptResult.amount||'';
+
+    // 日期
+    const dateEl=document.getElementById('date-input');
+    if(dateEl) dateEl.value=receiptResult.date||today();
+
+    calcConverted();
+    showToast('收據已套用 ✓');
+  }, 300);
 };
 
 // ── Utils ─────────────────────────────────────────────────
