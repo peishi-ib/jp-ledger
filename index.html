@@ -203,7 +203,18 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
 .sync-dot.syncing{background:#f59e0b;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-/* ── Empty ── */
+/* ── Receipt items ── */
+.receipt-item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;position:relative}
+.receipt-item.skipped{opacity:.45}
+.receipt-item-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.receipt-item-check{width:20px;height:20px;border-radius:6px;border:2px solid var(--border);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.75rem;transition:all .15s;background:#fff}
+.receipt-item-check.checked{background:var(--ink);border-color:var(--ink);color:#fff}
+.receipt-item-desc{flex:1;font-size:.88rem;font-weight:500;border:none;background:transparent;outline:none;font-family:'Noto Sans TC',sans-serif;color:var(--ink);padding:0}
+.receipt-item-amount{font-family:'DM Mono',monospace;font-size:.88rem;font-weight:500;border:none;background:transparent;outline:none;text-align:right;width:72px;color:var(--ink);padding:0}
+.receipt-item-bottom{display:flex;gap:6px;align-items:center}
+.receipt-mini-select{padding:5px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:.75rem;font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink);outline:none;cursor:pointer;flex:1}
+.receipt-del-btn{background:none;border:none;color:var(--border);cursor:pointer;font-size:.8rem;padding:4px;flex-shrink:0}
+.receipt-del-btn:hover{color:var(--red)}
 .empty-state{text-align:center;padding:48px 24px;color:var(--ink-light)}
 .empty-state .e-icon{font-size:2.5rem;margin-bottom:12px}
 .empty-state .e-text{font-size:.88rem}
@@ -397,25 +408,47 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
     <div class="modal-handle"></div>
     <div class="modal-header"><span class="modal-title">📷 拍收據辨識</span><button class="modal-close" onclick="closeModal('modal-receipt')">✕</button></div>
     <div class="modal-body">
+      <!-- Step 1: Upload -->
       <div id="receipt-upload-area" style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;margin-bottom:16px" onclick="document.getElementById('receipt-file-input').click()">
         <div style="font-size:2rem;margin-bottom:8px">📄</div>
         <div style="font-size:.88rem;color:var(--ink-mid)">拍照 或 從相簿／檔案選取</div>
         <div style="font-size:.72rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace">支援 JPG、PNG、HEIC · 電子發票截圖也可以</div>
       </div>
       <input type="file" id="receipt-file-input" accept="image/*" style="display:none" onchange="handleReceiptFile(this)">
-      <div id="receipt-preview" style="display:none;margin-bottom:16px">
-        <img id="receipt-img" style="width:100%;border-radius:10px;max-height:240px;object-fit:contain;background:var(--bg)">
+
+      <!-- Preview -->
+      <div id="receipt-preview" style="display:none;margin-bottom:12px">
+        <img id="receipt-img" style="width:100%;border-radius:10px;max-height:200px;object-fit:contain;background:var(--bg)">
       </div>
-      <div id="receipt-result" style="display:none">
-        <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">辨識結果</div>
-        <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:14px" id="receipt-result-content"></div>
-        <button class="btn-submit" onclick="applyReceiptResult()">套用到表單 ✓</button>
-      </div>
+
+      <!-- Scanning -->
       <div id="receipt-scanning" style="display:none;text-align:center;padding:24px">
         <div class="spinner" style="margin:0 auto 12px;border-top-color:var(--travel)"></div>
-        <div style="font-size:.82rem;color:var(--ink-mid)">AI 辨識中…</div>
+        <div style="font-size:.82rem;color:var(--ink-mid)">AI 辨識中，分析明細…</div>
       </div>
-      <div id="receipt-error" style="display:none;color:var(--red);font-size:.82rem;padding:12px;background:#fef2f2;border-radius:8px"></div>
+
+      <!-- Error -->
+      <div id="receipt-error" style="display:none;color:var(--red);font-size:.82rem;padding:12px;background:#fef2f2;border-radius:8px;margin-bottom:12px"></div>
+
+      <!-- Step 2: Item list -->
+      <div id="receipt-items-section" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">辨識明細</div>
+            <div style="font-size:.72rem;color:var(--ink-mid);margin-top:2px" id="receipt-date-currency"></div>
+          </div>
+          <div style="font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace" id="receipt-total-display"></div>
+        </div>
+
+        <!-- Items list -->
+        <div id="receipt-items-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+
+        <!-- Add manual row -->
+        <button onclick="addManualReceiptRow()" style="width:100%;padding:10px;background:none;border:1.5px dashed var(--border);border-radius:10px;font-size:.82rem;color:var(--ink-mid);cursor:pointer;font-family:'Noto Sans TC',sans-serif">＋ 手動新增一列</button>
+
+        <!-- Submit -->
+        <button class="btn-submit" onclick="saveReceiptItems()" style="margin-top:12px" id="btn-receipt-save">全部存入帳本 →</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1195,119 +1228,101 @@ window.clearApiKey=()=>{
 };
 
 // ── Receipt Scan ──────────────────────────────────────────
-let receiptResult = null;
+let receiptItems = []; // [{id, checked, desc, amount, currency, cat, who}]
+let receiptMeta = { date: '', currency: 'JPY', rate: 0.213 };
 
 window.openReceiptScan=()=>{
   const key=localStorage.getItem('anthropic_api_key');
-  if(!key){
-    showToast('請先到設定頁填入 API Key');
-    switchPage('settings');
-    return;
-  }
-  // reset
+  if(!key){ showToast('請先到設定頁填入 API Key'); switchPage('settings'); return; }
   document.getElementById('receipt-preview').style.display='none';
-  document.getElementById('receipt-result').style.display='none';
   document.getElementById('receipt-scanning').style.display='none';
   document.getElementById('receipt-error').style.display='none';
+  document.getElementById('receipt-items-section').style.display='none';
   document.getElementById('receipt-upload-area').style.display='block';
   document.getElementById('receipt-file-input').value='';
-  receiptResult=null;
+  receiptItems=[];
   openModal('modal-receipt');
 };
 
 window.handleReceiptFile=async(input)=>{
   const file=input.files[0]; if(!file) return;
   const key=localStorage.getItem('anthropic_api_key');
+  const trip=currentTripId?state.trips.find(t=>t.id===currentTripId):null;
+  const mainCur=trip?.mainCur||'TWD';
+  const her=state.settings.herName, him=state.settings.himName;
 
-  // show preview
+  // preview
   const reader=new FileReader();
-  reader.onload=(e)=>{
-    document.getElementById('receipt-img').src=e.target.result;
-    document.getElementById('receipt-preview').style.display='block';
-    document.getElementById('receipt-upload-area').style.display='none';
-  };
+  reader.onload=(e)=>{ document.getElementById('receipt-img').src=e.target.result; document.getElementById('receipt-preview').style.display='block'; };
   reader.readAsDataURL(file);
-
-  // show scanning
+  document.getElementById('receipt-upload-area').style.display='none';
   document.getElementById('receipt-scanning').style.display='block';
-  document.getElementById('receipt-result').style.display='none';
   document.getElementById('receipt-error').style.display='none';
+  document.getElementById('receipt-items-section').style.display='none';
 
   try {
-    // convert to base64
-    const base64=await new Promise((res,rej)=>{
-      const r=new FileReader();
-      r.onload=()=>res(r.result.split(',')[1]);
-      r.onerror=rej;
-      r.readAsDataURL(file);
-    });
-
+    const base64=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
     const mediaType=file.type||'image/jpeg';
-    const trip=currentTripId?state.trips.find(t=>t.id===currentTripId):null;
-    const mainCur=trip?.mainCur||'TWD';
 
-    const prompt=`你是一個收據辨識助理。請分析這張收據圖片，回傳 JSON 格式，不要有任何其他文字。
-
-格式如下：
-{
-  "amount": 數字（原始金額，不含匯率換算）,
-  "currency": "JPY" 或 "TWD" 或 "USD"（根據收據判斷，預設 ${mainCur}）,
-  "date": "YYYY-MM-DD"（若收據有日期則填入，否則填今天 ${today()}）,
-  "desc": "簡短描述（繁體中文，例如：lawson 飯糰、咖啡廳午餐）",
-  "cat": "食" 或 "住" 或 "行" 或 "購物" 或 "樂" 或 "其他",
-  "confidence": "high" 或 "low"
-}
+    const prompt=`你是收據辨識助理。請分析這張收據，將每個消費明細列出來，回傳 JSON，不要有任何其他文字。
 
 注意：
-- 金額填收據上的總金額
-- 日文收據通常是日圓（JPY）
-- 描述盡量簡短有意義
-- 無法辨識就填 confidence: "low"`;
+- 金額使用含稅的最終金額
+- 品名翻譯成繁體中文簡短描述
+- 忽略小計、合計、稅額、服務費等非商品列
+- currency 根據收據判斷，日文收據通常是 JPY，預設 ${mainCur}
+- cat 分類：食（餐廳、飲料、食物）、住（住宿、日常用品）、行（交通）、樂（景點、紀念品、娛樂）、購物（服飾、雜貨）、其他
+- date 若收據有日期則填入 YYYY-MM-DD 格式，否則填 ${today()}
+- who 預設 "even"（均分）
+
+回傳格式：
+{
+  "date": "YYYY-MM-DD",
+  "currency": "JPY",
+  "items": [
+    { "id": 1, "desc": "繁體中文描述", "amount": 數字, "cat": "食", "who": "even" },
+    { "id": 2, "desc": "繁體中文描述", "amount": 數字, "cat": "樂", "who": "even" }
+  ]
+}`;
 
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':key,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:500,
-        messages:[{
-          role:'user',
-          content:[
-            {type:'image',source:{type:'base64',media_type:mediaType,data:base64}},
-            {type:'text',text:prompt}
-          ]
-        }]
+        model:'claude-sonnet-4-6', max_tokens:1500,
+        messages:[{role:'user',content:[
+          {type:'image',source:{type:'base64',media_type:mediaType,data:base64}},
+          {type:'text',text:prompt}
+        ]}]
       })
     });
 
-    if(!resp.ok){
-      const err=await resp.json();
-      throw new Error(err.error?.message||'API 錯誤');
-    }
-
+    if(!resp.ok){ const err=await resp.json(); throw new Error(err.error?.message||'API 錯誤'); }
     const data=await resp.json();
     const text=data.content[0].text.trim();
-    const clean=text.replace(/```json|```/g,'').trim();
-    receiptResult=JSON.parse(clean);
+    const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
+
+    receiptMeta.date=parsed.date||today();
+    receiptMeta.currency=parsed.currency||mainCur;
+    const refs={JPY:0.213,USD:32.5,TWD:1};
+    receiptMeta.rate=refs[receiptMeta.currency]||1;
+
+    receiptItems=parsed.items.map((item,i)=>({
+      id: i, checked:true,
+      desc: item.desc||'',
+      amount: item.amount||0,
+      cat: item.cat||'其他',
+      who: item.who||'even'
+    }));
 
     document.getElementById('receipt-scanning').style.display='none';
-    document.getElementById('receipt-result').style.display='block';
+    document.getElementById('receipt-items-section').style.display='block';
 
-    const conf=receiptResult.confidence==='high'?'✓ 辨識完成':'⚠️ 辨識信心較低，請確認';
-    const confColor=receiptResult.confidence==='high'?'var(--green)':'#f59e0b';
-    document.getElementById('receipt-result-content').innerHTML=`
-      <div style="font-size:.72rem;color:${confColor};font-family:'DM Mono',monospace;margin-bottom:10px">${conf}</div>
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:.85rem">
-        <span style="color:var(--ink-light)">金額</span><span style="font-family:'DM Mono',monospace;font-weight:600">${receiptResult.amount?.toLocaleString()} ${receiptResult.currency}</span>
-        <span style="color:var(--ink-light)">日期</span><span style="font-family:'DM Mono',monospace">${receiptResult.date}</span>
-        <span style="color:var(--ink-light)">說明</span><span>${receiptResult.desc}</span>
-        <span style="color:var(--ink-light)">類別</span><span>${receiptResult.cat}</span>
-      </div>`;
+    const total=receiptItems.reduce((s,i)=>s+i.amount,0);
+    document.getElementById('receipt-date-currency').textContent=receiptMeta.date+' · '+receiptMeta.currency+(receiptMeta.currency!=='TWD'?' (匯率'+receiptMeta.rate+')':'');
+    document.getElementById('receipt-total-display').textContent='合計 '+receiptMeta.currency+' '+total.toLocaleString();
+
+    renderReceiptItems();
 
   } catch(e) {
     document.getElementById('receipt-scanning').style.display='none';
@@ -1316,57 +1331,95 @@ window.handleReceiptFile=async(input)=>{
   }
 };
 
-window.applyReceiptResult=()=>{
-  if(!receiptResult) return;
-  closeModal('modal-receipt');
+function renderReceiptItems(){
+  const her=state.settings.herName, him=state.settings.himName;
+  const cats=['食','住','行','樂','購物','其他'];
+  const listEl=document.getElementById('receipt-items-list');
+  listEl.innerHTML=receiptItems.map((item,idx)=>`
+    <div class="receipt-item ${item.checked?'':'skipped'}" id="ritem-${item.id}">
+      <div class="receipt-item-top">
+        <div class="receipt-item-check ${item.checked?'checked':''}" onclick="toggleReceiptItem(${item.id})">
+          ${item.checked?'✓':''}
+        </div>
+        <input class="receipt-item-desc" value="${item.desc}" onchange="updateReceiptItem(${item.id},'desc',this.value)" placeholder="項目說明">
+        <input class="receipt-item-amount" type="number" value="${item.amount}" onchange="updateReceiptItem(${item.id},'amount',parseFloat(this.value)||0)"> <span style="font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace">${receiptMeta.currency}</span>
+        <button class="receipt-del-btn" onclick="removeReceiptItem(${item.id})">✕</button>
+      </div>
+      <div class="receipt-item-bottom">
+        <select class="receipt-mini-select" onchange="updateReceiptItem(${item.id},'cat',this.value)">
+          ${cats.map(c=>`<option value="${c}" ${item.cat===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <select class="receipt-mini-select" onchange="updateReceiptItem(${item.id},'who',this.value)">
+          <option value="even" ${item.who==='even'?'selected':''}>均分</option>
+          <option value="her" ${item.who==='her'?'selected':''}>我的（${her}）</option>
+          <option value="him" ${item.who==='him'?'selected':''}>他的（${him}）</option>
+          <option value="self" ${item.who==='self'?'selected':''}>我自己</option>
+        </select>
+      </div>
+    </div>`).join('');
 
-  // 確保表單已開啟
-  if(!document.getElementById('modal-add').classList.contains('open')){
-    openAddModal();
-  }
+  const checkedCount=receiptItems.filter(i=>i.checked).length;
+  document.getElementById('btn-receipt-save').textContent=`存入帳本（${checkedCount} 筆）→`;
+}
 
-  // 填入辨識結果
-  setTimeout(()=>{
-    // 類別
-    document.querySelectorAll('#cat-chips .chip').forEach(c=>{
-      c.classList.remove('active-cat');
-      if(c.dataset.cat===receiptResult.cat) c.classList.add('active-cat');
-    });
-    formState.cat=receiptResult.cat;
+window.toggleReceiptItem=(id)=>{
+  const item=receiptItems.find(i=>i.id===id); if(!item) return;
+  item.checked=!item.checked;
+  renderReceiptItems();
+};
+window.updateReceiptItem=(id,field,val)=>{
+  const item=receiptItems.find(i=>i.id===id); if(!item) return;
+  item[field]=val;
+  if(field==='amount'||field==='cat') renderReceiptItems();
+  else { const checkedCount=receiptItems.filter(i=>i.checked).length; document.getElementById('btn-receipt-save').textContent=`存入帳本（${checkedCount} 筆）→`; }
+};
+window.removeReceiptItem=(id)=>{
+  receiptItems=receiptItems.filter(i=>i.id!==id);
+  renderReceiptItems();
+};
+window.addManualReceiptRow=()=>{
+  const newId=Date.now();
+  receiptItems.push({id:newId,checked:true,desc:'',amount:0,cat:'食',who:'even'});
+  renderReceiptItems();
+  // focus new row desc
+  setTimeout(()=>{ const el=document.querySelector(`#ritem-${newId} .receipt-item-desc`); if(el) el.focus(); },100);
+};
 
-    // 說明
-    const descEl=document.getElementById('desc-input');
-    if(descEl) descEl.value=receiptResult.desc||'';
+window.saveReceiptItems=async()=>{
+  const toSave=receiptItems.filter(i=>i.checked&&i.desc&&i.amount>0);
+  if(toSave.length===0){showToast('沒有可存入的項目');return;}
 
-    // 幣別
-    const cur=receiptResult.currency||'TWD';
-    document.querySelectorAll('#cur-chips .chip').forEach(c=>{
-      c.classList.remove('active-cur');
-      if(c.dataset.cur===cur) c.classList.add('active-cur');
-    });
-    formState.currency=cur;
-    const isForeign=cur!=='TWD';
-    const rateEl=document.getElementById('rate-input');
-    const rateHint=document.getElementById('rate-hint');
-    if(rateEl) rateEl.style.display=isForeign?'block':'none';
-    if(rateHint) rateHint.style.display=isForeign?'block':'none';
-    if(isForeign && rateEl){
-      const refs={JPY:0.213,USD:32.5};
-      rateEl.value=refs[cur]||'';
-      if(rateHint) rateHint.textContent='參考匯率（1 '+cur+' = ? TWD，可修改）';
-    }
+  const cur=receiptMeta.currency;
+  const rate=receiptMeta.rate;
+  const date=receiptMeta.date;
+  const isForeign=cur!=='TWD';
+  const her=state.settings.herName, him=state.settings.himName;
 
-    // 金額
-    const amtEl=document.getElementById('amount-input');
-    if(amtEl) amtEl.value=receiptResult.amount||'';
+  setBusy('btn-receipt-save',true,'存入中…');
+  try{
+    const uid=currentUser.uid;
+    const colRef=currentTripId
+      ? collection(db,'users',uid,'trips',currentTripId,'expenses')
+      : collection(db,'users',uid,'expenses');
 
-    // 日期
-    const dateEl=document.getElementById('date-input');
-    if(dateEl) dateEl.value=receiptResult.date||today();
+    await Promise.all(toSave.map(item=>{
+      const twd=isForeign?Math.round(item.amount*rate):item.amount;
+      let herOwes=0,himOwes=0;
+      if(item.who==='even'){herOwes=twd/2;himOwes=twd/2;}
+      else if(item.who==='him'){himOwes=twd;}
+      else if(item.who==='her'||item.who==='self'){herOwes=twd;}
+      return addDoc(colRef,{
+        cat:item.cat, desc:item.desc, amount:item.amount,
+        currency:cur, rate, twd, payer:'her',
+        split:item.who==='even'?'even':item.who==='him'?'him':item.who==='self'?'self':'her',
+        herOwes, himOwes, date, createdAt:Date.now()
+      });
+    }));
 
-    calcConverted();
-    showToast('收據已套用 ✓');
-  }, 300);
+    closeModal('modal-receipt');
+    showToast(`已存入 ${toSave.length} 筆 ✓`);
+  }catch(e){showToast('儲存失敗：'+e.message);}
+  setBusy('btn-receipt-save',false,`存入帳本 →`);
 };
 
 // ── Utils ─────────────────────────────────────────────────
