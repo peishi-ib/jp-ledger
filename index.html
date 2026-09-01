@@ -399,10 +399,10 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
     <div class="modal-body">
       <div id="receipt-upload-area" style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;margin-bottom:16px" onclick="document.getElementById('receipt-file-input').click()">
         <div style="font-size:2rem;margin-bottom:8px">📄</div>
-        <div style="font-size:.88rem;color:var(--ink-mid)">點擊選擇圖片或拍照</div>
-        <div style="font-size:.72rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace">支援 JPG、PNG、HEIC</div>
+        <div style="font-size:.88rem;color:var(--ink-mid)">拍照 或 從相簿／檔案選取</div>
+        <div style="font-size:.72rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace">支援 JPG、PNG、HEIC · 電子發票截圖也可以</div>
       </div>
-      <input type="file" id="receipt-file-input" accept="image/*" capture="environment" style="display:none" onchange="handleReceiptFile(this)">
+      <input type="file" id="receipt-file-input" accept="image/*" style="display:none" onchange="handleReceiptFile(this)">
       <div id="receipt-preview" style="display:none;margin-bottom:16px">
         <img id="receipt-img" style="width:100%;border-radius:10px;max-height:240px;object-fit:contain;background:var(--bg)">
       </div>
