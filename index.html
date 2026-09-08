@@ -521,7 +521,7 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut as fbSignOut, onAuthStateChanged }
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
@@ -560,10 +560,7 @@ let tripTabActive = 'list';
 let newTripCur = 'JPY';
 
 // ── Auth ─────────────────────────────────────────────────
-window.signIn = async () => { try { await signInWithRedirect(auth,provider); } catch(e) { showToast('登入失敗：'+e.message); } };
-
-// 處理從 Google 登入頁跳轉回來的結果
-getRedirectResult(auth).catch((e) => { console.error('redirect result error', e); });
+window.signIn = async () => { try { await signInWithPopup(auth,provider); } catch(e) { showToast('登入失敗：'+e.message); } };
 window.signOut = async () => { unsubs.forEach(u=>u()); unsubs=[]; await fbSignOut(auth); };
 
 onAuthStateChanged(auth, async (user) => {
