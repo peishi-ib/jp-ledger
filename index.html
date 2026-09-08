@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
@@ -316,6 +316,7 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
   </div>
   <!-- day indicator -->
   <div id="trip-day-indicator" style="margin:12px 16px 0;font-size:.78rem;color:var(--ink-mid);font-family:'DM Mono',monospace"></div>
+  <div id="trip-budget-block" style="margin:12px 16px 0"></div>
   <!-- stats toggle -->
   <div style="margin:12px 16px 0;display:flex;gap:8px">
     <div class="chip active-ink" id="trip-tab-list" onclick="switchTripTab('list')" style="font-size:.75rem">明細</div>
@@ -469,6 +470,10 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
           <div class="chip" data-cur="USD" onclick="selectTripCur(this)">USD 美元</div>
           <div class="chip" data-cur="TWD" onclick="selectTripCur(this)">台幣為主</div>
         </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">總預算（台幣，選填）</label>
+        <input class="form-input" id="trip-budget-input" type="number" placeholder="例：150000" style="font-family:'DM Mono',monospace">
       </div>
       <button class="btn-submit" id="btn-new-trip-submit" onclick="createTrip()">建立行程 ✓</button>
     </div>
@@ -861,6 +866,7 @@ window.openNewTripModal = () => {
   document.getElementById('trip-name-input').value='';
   document.getElementById('trip-start-input').value='';
   document.getElementById('trip-end-input').value='';
+  document.getElementById('trip-budget-input').value='';
   newTripCur='JPY';
   document.querySelectorAll('#trip-cur-chips .chip').forEach(c=>{c.classList.remove('active-ink');if(c.dataset.cur==='JPY')c.classList.add('active-ink');});
   openModal('modal-new-trip');
@@ -869,14 +875,23 @@ window.createTrip = async () => {
   const name=document.getElementById('trip-name-input').value.trim();
   const startDate=document.getElementById('trip-start-input').value;
   const endDate=document.getElementById('trip-end-input').value;
+  const budget=parseFloat(document.getElementById('trip-budget-input').value)||0;
   if(!name){showToast('請填寫行程名稱');return;}
   if(!startDate){showToast('請填寫出發日期');return;}
   setBusy('btn-new-trip-submit',true,'建立中…');
   try{
-    await addDoc(collection(db,'users',currentUser.uid,'trips'),{name,startDate,endDate,mainCur:newTripCur,archived:false,createdAt:Date.now()});
+    await addDoc(collection(db,'users',currentUser.uid,'trips'),{name,startDate,endDate,mainCur:newTripCur,budget,archived:false,createdAt:Date.now()});
     closeModal('modal-new-trip'); showToast('行程建立成功 ✓');
   }catch(e){showToast('建立失敗');}
   setBusy('btn-new-trip-submit',false,'建立行程 ✓');
+};
+window.editTripBudget = async (tripId) => {
+  const trip=state.trips.find(t=>t.id===tripId); if(!trip) return;
+  const val=prompt('設定總預算（台幣）', trip.budget||'');
+  if(val===null) return;
+  const budget=parseFloat(val)||0;
+  await updateDoc(doc(db,'users',currentUser.uid,'trips',tripId),{budget});
+  showToast('預算已更新 ✓');
 };
 
 window.openTrip = (tripId) => {
@@ -983,6 +998,9 @@ function renderTripDetail(){
     } else { document.getElementById('trip-day-indicator').textContent=''; }
   }
 
+  // budget block
+  renderTripBudget(trip, exps);
+
   // archive button
   const archRow=document.getElementById('trip-archive-row');
   if(!trip.archived){
@@ -1032,6 +1050,70 @@ function renderTripDetail(){
 
 window.setTripDayFilter=(d)=>{tripCurFilter=d;renderTripDetail();};
 
+function renderTripBudget(trip, exps){
+  const blockEl=document.getElementById('trip-budget-block');
+  if(!trip.budget || trip.budget<=0){
+    blockEl.innerHTML=`<div style="background:var(--surface);border:1px dashed var(--border);border-radius:12px;padding:14px;text-align:center">
+      <span style="font-size:.78rem;color:var(--ink-light)">尚未設定預算</span>
+      <button onclick="editTripBudget('${trip.id}')" style="margin-left:8px;padding:5px 12px;background:var(--travel);color:#fff;border:none;border-radius:8px;font-size:.72rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer">設定預算</button>
+    </div>`;
+    return;
+  }
+
+  const fixedTotal=exps.filter(e=>e.cat==='住'||e.cat==='行').reduce((s,e)=>s+e.twd,0);
+  const flexTotal=exps.filter(e=>e.cat!=='住'&&e.cat!=='行').reduce((s,e)=>s+e.twd,0);
+  const grandTotal=fixedTotal+flexTotal;
+  const remaining=trip.budget-grandTotal;
+  const flexBudget=trip.budget-fixedTotal; // 扣掉固定支出後，彈性可花總額
+  const flexRemaining=flexBudget-flexTotal;
+
+  // 剩餘天數：只在行程期間內才算（出發後）
+  let dayInfo='';
+  let perDayRemaining=null;
+  if(trip.startDate && trip.endDate){
+    const start=new Date(trip.startDate);
+    const end=new Date(trip.endDate);
+    const now=new Date();
+    const todayMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    if(todayMidnight>=start && todayMidnight<=end){
+      const daysLeft=Math.floor((end-todayMidnight)/(1000*60*60*24))+1; // 含今天
+      perDayRemaining=flexRemaining/daysLeft;
+      dayInfo=`剩 ${daysLeft} 天`;
+    } else if(todayMidnight<start){
+      dayInfo='尚未出發';
+    } else {
+      dayInfo='已結束';
+    }
+  }
+
+  const pct=Math.min(100,Math.round(grandTotal/trip.budget*100));
+  const overBudget=remaining<0;
+
+  blockEl.innerHTML=`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">預算</span>
+        <span onclick="editTripBudget('${trip.id}')" style="font-size:.7rem;color:var(--ink-light);text-decoration:underline;cursor:pointer">編輯</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-family:'DM Mono',monospace;font-size:1.3rem;font-weight:600;color:${overBudget?'var(--red)':'var(--ink)'}">$${Math.round(grandTotal).toLocaleString()}</span>
+        <span style="font-size:.78rem;color:var(--ink-light);font-family:'DM Mono',monospace">/ $${trip.budget.toLocaleString()}</span>
+      </div>
+      <div style="height:6px;background:var(--border);border-radius:99px;overflow:hidden;margin-bottom:10px">
+        <div style="height:100%;width:${pct}%;background:${overBudget?'var(--red)':'var(--travel)'};transition:width .3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink-mid);margin-bottom:${perDayRemaining!==null?'10px':'0'}">
+        <span>固定支出（住+行）$${Math.round(fixedTotal).toLocaleString()}</span>
+        <span>${overBudget?'超支':'剩餘'} $${Math.abs(Math.round(remaining)).toLocaleString()}</span>
+      </div>
+      ${perDayRemaining!==null?`
+      <div style="border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:.75rem;color:var(--ink-mid)">彈性預算每日可花（${dayInfo}）</span>
+        <span style="font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;color:${perDayRemaining<0?'var(--red)':'var(--green)'}">$${Math.round(perDayRemaining).toLocaleString()}</span>
+      </div>`:dayInfo?`<div style="font-size:.72rem;color:var(--ink-light);text-align:center;margin-top:4px">${dayInfo}</div>`:''}
+    </div>`;
+}
+
 function renderTripStats(){
   const exps=state.tripExpenses[currentTripId]||[];
   const cats=['食','住','行','購物','樂','其他'];
@@ -1039,19 +1121,1601 @@ function renderTripStats(){
   const catTotals={}; cats.forEach(c=>catTotals[c]=0);
   let grandTotal=0; const her=state.settings.herName,him=state.settings.himName;
   let herPaid=0,himPaid=0,selfTotal=0;
-  exps.forEach(e=>{catTotals[e.cat]=(catTotals[e.cat]||0)+e.twd;grandTotal+=e.twd;if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;if(e.split==='self')selfTotal+=e.twd;});
+  // 個人「實際花費」= herOwes / himOwes 加總（誰花的，不是誰付的）
+  let herSpent=0,himSpent=0;
+  const herCatTotals={}; const himCatTotals={}; cats.forEach(c=>{herCatTotals[c]=0;himCatTotals[c]=0;});
+  exps.forEach(e=>{
+    catTotals[e.cat]=(catTotals[e.cat]||0)+e.twd;grandTotal+=e.twd;
+    if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;
+    if(e.split==='self')selfTotal+=e.twd;
+    herSpent+=e.herOwes||0; himSpent+=e.himOwes||0;
+    herCatTotals[e.cat]=(herCatTotals[e.cat]||0)+(e.herOwes||0);
+    himCatTotals[e.cat]=(himCatTotals[e.cat]||0)+(e.himOwes||0);
+  });
   const maxVal=Math.max(...Object.values(catTotals),1);
   const el=document.getElementById('trip-stats-content');
   if(exps.length===0){el.innerHTML=`<div class="empty-state"><div class="e-icon">📊</div><div class="e-text">還沒有資料</div></div>`;return;}
+
+  // Top items per person (for "買了什麼")
+  const herTop=exps.filter(e=>(e.herOwes||0)>0).sort((a,b)=>(b.herOwes||0)-(a.herOwes||0)).slice(0,5);
+  const himTop=exps.filter(e=>(e.himOwes||0)>0).sort((a,b)=>(b.himOwes||0)-(a.himOwes||0)).slice(0,5);
+
   el.innerHTML=`
     <div class="stats-section">
-      <div class="stats-section-title">各類別花費</div>
+      <div class="stats-section-title">兩人各自花費</div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herSpent/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herSpent).toLocaleString()}</div></div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himSpent/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himSpent).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">${her} 買了什麼（金額前5）</div>
+      ${herTop.length===0?'<div class="stat-row"><div class="stat-name" style="color:var(--ink-light)">尚無資料</div></div>':herTop.map(e=>`
+        <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[e.cat]}"></div><div class="stat-name">${e.desc}</div><div class="stat-val" style="width:auto">$${Math.round(e.herOwes).toLocaleString()}</div></div>`).join('')}
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">${him} 買了什麼（金額前5）</div>
+      ${himTop.length===0?'<div class="stat-row"><div class="stat-name" style="color:var(--ink-light)">尚無資料</div></div>':himTop.map(e=>`
+        <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[e.cat]}"></div><div class="stat-name">${e.desc}</div><div class="stat-val" style="width:auto">$${Math.round(e.himOwes).toLocaleString()}</div></div>`).join('')}
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">各類別花費（全部）</div>
       ${cats.filter(c=>catTotals[c]>0).sort((a,b)=>catTotals[b]-catTotals[a]).map(c=>`
         <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[c]}"></div><div class="stat-name">${c}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${Math.round(catTotals[c]/maxVal*100)}%;background:${catColors[c]}"></div></div><div class="stat-val">$${Math.round(catTotals[c]).toLocaleString()}</div></div>`).join('')}
       <div class="stat-row" style="background:var(--bg)"><div class="stat-cat-dot" style="background:var(--ink)"></div><div class="stat-name" style="font-weight:600">總計</div><div class="stat-bar-wrap"></div><div class="stat-val" style="color:var(--ink);font-weight:600">$${Math.round(grandTotal).toLocaleString()}</div></div>
     </div>
     <div class="stats-section">
+      <div class="stats-section-title">付款分布（誰刷卡付的）</div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herPaid/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herPaid).toLocaleString()}</div></div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himPaid/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himPaid).toLocaleString()}</div></div>
+      ${selfTotal>0?`<div class="stat-row"><div class="stat-cat-dot" style="background:var(--self)"></div><div class="stat-name">我自己</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(selfTotal/grandTotal*100):0}%;background:var(--self)"></div></div><div class="stat-val" style="color:var(--self)">$${Math.round(selfTotal).toLocaleString()}</div></div>`:''}
+    </div>`;
+}
+
+function renderTripSettle(){
+  const exps=state.tripExpenses[currentTripId]||[];
+  const settles=state.tripSettlements[currentTripId]||[];
+  const her=state.settings.herName,him=state.settings.himName;
+  let himOwesTotal=0,himPaid=0;
+  exps.forEach(e=>{himOwesTotal+=e.himOwes||0;if(e.payer==='him')himPaid+=e.twd;});
+  let diff=himOwesTotal-himPaid;
+  settles.forEach(s=>{diff-=s.amount;});
+  const statusEl=document.getElementById('trip-settle-status');
+  if(Math.abs(diff)<1){statusEl.innerHTML=`<div style="text-align:center;padding:12px;color:var(--green);font-weight:600">✓ 此趟旅遊不需還款</div>`;}
+  else if(diff>0){statusEl.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${him} 需還給 ${her}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--him)">$${Math.round(diff).toLocaleString()}</div></div>`;document.getElementById('trip-settle-amount').placeholder=Math.round(diff);}
+  else{const owe=Math.abs(diff);statusEl.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${her} 需還給 ${him}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--her)">$${Math.round(owe).toLocaleString()}</div></div>`;document.getElementById('trip-settle-amount').placeholder=Math.round(owe);}
+  const histEl=document.getElementById('trip-settle-history');
+  if(settles.length===0){histEl.innerHTML=`<div style="text-align:center;padding:24px;color:var(--ink-light);font-size:.82rem">還沒有還款紀錄</div>`;}
+  else{histEl.innerHTML=settles.map(s=>`<div class="settle-item"><div class="settle-dot"></div><div class="settle-info"><div class="s-desc">${s.note||'還款'}</div><div class="s-date">${s.date}</div></div><div class="settle-amount">$${s.amount.toLocaleString()}</div><button class="settle-del" onclick="deleteTripSettle('${s.id}')">✕</button></div>`).join('');}
+}
+
+window.doTripSettle = async () => {
+  const amount=parseFloat(document.getElementById('trip-settle-amount').value);
+  const note=document.getElementById('trip-settle-note').value.trim();
+  if(!amount||amount<=0){showToast('請填寫還款金額');return;}
+  await addDoc(collection(db,'users',currentUser.uid,'trips',currentTripId,'settlements'),{amount,note,date:today(),createdAt:Date.now()});
+  document.getElementById('trip-settle-amount').value='';
+  document.getElementById('trip-settle-note').value='';
+  showToast('還款已記錄 ✓');
+};
+window.deleteTripSettle = async (id) => {
+  if(!confirm('確定刪除？')) return;
+  await deleteDoc(doc(db,'users',currentUser.uid,'trips',currentTripId,'settlements',id));
+};
+window.deleteTripExpense = async (id) => {
+  if(!confirm('確定刪除這筆？')) return;
+  await deleteDoc(doc(db,'users',currentUser.uid,'trips',currentTripId,'expenses',id));
+};
+window.archiveTrip = async (id) => {
+  if(!confirm('封存後行程會標記為結束，確定嗎？')) return;
+  await updateDoc(doc(db,'users',currentUser.uid,'trips',id),{archived:true});
+  showToast('已封存 ✓');
+};
+
+// ── Daily Calc ────────────────────────────────────────────
+function calcBalance(){
+  let herPaid=0,himPaid=0,himOwesTotal=0;
+  state.expenses.forEach(e=>{if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;himOwesTotal+=e.himOwes||0;});
+  let totalDeposit=0;
+  state.deposits.forEach(d=>{totalDeposit+=d.amount;});
+  // 正數 = 他還欠你；負數 = 他多給你（你手上還有他的錢）
+  // 他應付 - 他實際付 - 他的預付金 + 已還款抵消
+  let diff=himOwesTotal-himPaid-totalDeposit;
+  state.settlements.forEach(s=>{diff+=s.amount;});
+  // 預付金餘額：他給的錢 - 你實際花掉的（你付出的所有）
+  const depositBalance=totalDeposit-herPaid;
+  return{herPaid,himPaid,total:herPaid+himPaid,diff,depositBalance,totalDeposit};
+}
+
+// ── Render (daily) ────────────────────────────────────────
+let activeMonthFilter2=null;
+function render(){
+  const{herPaid,himPaid,total,diff,depositBalance}=calcBalance();
+  const her=state.settings.herName,him=state.settings.himName;
+  document.getElementById('her-pill-label').textContent=her+' 付出';
+  document.getElementById('him-pill-label').textContent=him+' 付出';
+  document.getElementById('her-pill').textContent='$'+Math.round(herPaid).toLocaleString();
+  document.getElementById('him-pill').textContent='$'+Math.round(himPaid).toLocaleString();
+  document.getElementById('total-pill').textContent='$'+Math.round(total).toLocaleString();
+  const chip=document.getElementById('balance-chip');
+  if(Math.abs(diff)<1){
+    chip.className='balance-chip even';chip.textContent='✓ 平衡';
+    document.getElementById('balance-main').textContent='$0';
+    document.getElementById('balance-sub').textContent='目前不需還款';
+  } else if(diff>0){
+    chip.className='balance-chip owe';chip.textContent=him+' 欠 '+her;
+    document.getElementById('balance-main').textContent='$'+Math.round(diff).toLocaleString();
+    document.getElementById('balance-sub').textContent=him+' 需還給 '+her;
+  } else {
+    chip.className='balance-chip owed';chip.textContent='持有 '+him+' 的錢';
+    document.getElementById('balance-main').textContent='$'+Math.round(Math.abs(diff)).toLocaleString();
+    document.getElementById('balance-sub').textContent=her+' 手上還有 '+him+' 的預付金';
+  }
+  const depEl=document.getElementById('deposit-val');
+  depEl.textContent='$'+Math.round(depositBalance).toLocaleString();
+  depEl.className='val '+(depositBalance>=0?'positive':'negative');
+  const depHist=document.getElementById('deposit-history');
+  if(state.deposits.length===0){depHist.style.display='none';}
+  else{depHist.style.display='block';document.getElementById('deposit-history-list').innerHTML=state.deposits.map(d=>`<div class="settle-item"><div class="settle-dot" style="background:var(--him)"></div><div class="settle-info"><div class="s-desc">${d.note||'儲值'}</div><div class="s-date">${d.date}</div></div><div class="settle-amount" style="color:var(--him)">+$${d.amount.toLocaleString()}</div><button class="settle-del" onclick="deleteDeposit('${d.id}')">✕</button></div>`).join('');}
+  const months=[...new Set(state.expenses.map(e=>e.date.slice(0,7)))].sort().reverse();
+  const scroller=document.getElementById('month-scroller');
+  scroller.innerHTML=months.length===0?'':
+    `<div class="month-chip ${!activeMonthFilter2?'active':''}" onclick="setMonthFilter(null)">全部</div>`+
+    months.map(m=>`<div class="month-chip ${activeMonthFilter2===m?'active':''}" onclick="setMonthFilter('${m}')">${m}</div>`).join('');
+  const filtered=activeMonthFilter2?state.expenses.filter(e=>e.date.slice(0,7)===activeMonthFilter2):state.expenses;
+  document.getElementById('list-count').textContent=`紀錄（${filtered.length} 筆）`;
+  const listEl=document.getElementById('expense-list');
+  if(filtered.length===0){listEl.innerHTML=`<div class="empty-state"><div class="e-icon">📒</div><div class="e-text">還沒有紀錄</div></div>`;return;}
+  const splitColors={even:'#059669',him:'#1d4ed8',her:'#b45309',custom:'#7c3aed',self:'#7c3aed'};
+  const splitTagClass={even:'tag-split',him:'tag-him',her:'tag-her',custom:'tag-self',self:'tag-self'};
+  const splitLabel=(e)=>{if(e.split==='even')return '均分';if(e.split==='him')return '全算'+him;if(e.split==='her')return '全算'+her;if(e.split==='custom')return her+' '+Math.round(e.herOwes)+' / '+him+' '+Math.round(e.himOwes);if(e.split==='self')return '我自己';return '';};
+  listEl.innerHTML=filtered.map(e=>`<div class="expense-card"><div class="e-stripe" style="background:${splitColors[e.split]||'#ccc'}"></div><div class="e-cat">${e.cat} · ${e.date}</div><div></div><div class="e-desc">${e.desc}</div><div class="e-right"><div class="e-amount">${e.currency!=='TWD'?e.amount.toLocaleString()+' '+e.currency+'<br><span style="font-size:.78rem;color:var(--ink-mid)">≈ </span>':''}$${Math.round(e.twd).toLocaleString()}</div><div class="e-split-tag ${splitTagClass[e.split]}">${splitLabel(e)}</div></div><div class="e-meta">由 ${e.payer==='her'?her:him} 付款</div><button class="e-delete" onclick="deleteExpense('${e.id}')">✕</button></div>`).join('');
+}
+window.setMonthFilter=(m)=>{activeMonthFilter2=m;render();};
+window.deleteExpense=async(id)=>{if(!confirm('確定刪除這筆？'))return;await deleteDoc(doc(db,'users',currentUser.uid,'expenses',id));};
+
+// ── Stats (daily) ──────────────────────────────────────────
+function renderStats(){
+  const her=state.settings.herName,him=state.settings.himName;
+  const cats=['食','住','行','購物','樂','其他'];
+  const catColors={'食':'#f97316','住':'#3b82f6','行':'#10b981','購物':'#ec4899','樂':'#8b5cf6','其他':'#94a3b8'};
+  const catTotals={};cats.forEach(c=>catTotals[c]=0);
+  let grandTotal=0,herPaid=0,himPaid=0;
+  state.expenses.forEach(e=>{catTotals[e.cat]=(catTotals[e.cat]||0)+e.twd;grandTotal+=e.twd;if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;});
+  const maxVal=Math.max(...Object.values(catTotals),1);
+  const content=document.getElementById('stats-content');
+  if(state.expenses.length===0){content.innerHTML=`<div class="empty-state"><div class="e-icon">📊</div><div class="e-text">還沒有資料</div></div>`;return;}
+  content.innerHTML=`
+    <div class="stats-section" style="margin-top:16px">
+      <div class="stats-section-title">各類別花費</div>
+      ${cats.filter(c=>catTotals[c]>0).sort((a,b)=>catTotals[b]-catTotals[a]).map(c=>`<div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[c]}"></div><div class="stat-name">${c}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${Math.round(catTotals[c]/maxVal*100)}%;background:${catColors[c]}"></div></div><div class="stat-val">$${Math.round(catTotals[c]).toLocaleString()}</div></div>`).join('')}
+      <div class="stat-row" style="background:var(--bg)"><div class="stat-cat-dot" style="background:var(--ink)"></div><div class="stat-name" style="font-weight:600">總計</div><div class="stat-bar-wrap"></div><div class="stat-val" style="color:var(--ink);font-weight:600">$${Math.round(grandTotal).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
       <div class="stats-section-title">付款分布</div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herPaid/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herPaid).toLocaleString()}</div></div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himPaid/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himPaid).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">筆數統計</div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--ink)"></div><div class="stat-name">總筆數</div><div class="stat-bar-wrap"></div><div class="stat-val">${state.expenses.length} 筆</div></div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--ink-light)"></div><div class="stat-name">平均每筆</div><div class="stat-bar-wrap"></div><div class="stat-val">$${state.expenses.length?Math.round(grandTotal/state.expenses.length).toLocaleString():0}</div></div>
+    </div>`;
+}
+
+// ── Settings ──────────────────────────────────────────────
+function loadSettingsUI(){
+  document.getElementById('her-name-input').value=state.settings.herName||'';
+  document.getElementById('him-name-input').value=state.settings.himName||'';
+  // API key status
+  const key=localStorage.getItem('anthropic_api_key');
+  const statusEl=document.getElementById('api-key-status');
+  if(key){
+    statusEl.textContent='✓ 已設定（顯示前4碼：'+key.slice(0,12)+'…）';
+    statusEl.style.color='var(--green)';
+  } else {
+    statusEl.textContent='尚未設定';
+    statusEl.style.color='var(--ink-light)';
+  }
+}
+window.saveSettings=async()=>{
+  const herName=document.getElementById('her-name-input').value||'佩璽';
+  const himName=document.getElementById('him-name-input').value||'男友';
+  state.settings={herName,himName};
+  await setDoc(doc(db,'users',currentUser.uid,'config','settings'),{herName,himName});
+  render();
+};
+window.saveApiKey=()=>{
+  const key=document.getElementById('api-key-input').value.trim();
+  if(!key){showToast('請貼上 API Key');return;}
+  if(!key.startsWith('sk-ant-')){showToast('格式不對，應以 sk-ant- 開頭');return;}
+  localStorage.setItem('anthropic_api_key',key);
+  document.getElementById('api-key-input').value='';
+  loadSettingsUI();
+  showToast('API Key 已儲存 ✓');
+};
+window.clearApiKey=()=>{
+  if(!confirm('確定清除 API Key？')) return;
+  localStorage.removeItem('anthropic_api_key');
+  loadSettingsUI();
+  showToast('已清除');
+};
+
+// ── Receipt Scan ──────────────────────────────────────────
+let receiptItems = []; // [{id, checked, desc, amount, currency, cat, who}]
+let receiptMeta = { date: '', currency: 'JPY', rate: 0.213 };
+
+window.openReceiptScan=()=>{
+  const key=localStorage.getItem('anthropic_api_key');
+  if(!key){ showToast('請先到設定頁填入 API Key'); switchPage('settings'); return; }
+  document.getElementById('receipt-preview').style.display='none';
+  document.getElementById('receipt-scanning').style.display='none';
+  document.getElementById('receipt-error').style.display='none';
+  document.getElementById('receipt-items-section').style.display='none';
+  document.getElementById('receipt-upload-area').style.display='block';
+  document.getElementById('receipt-file-input').value='';
+  receiptItems=[];
+  openModal('modal-receipt');
+};
+
+window.handleReceiptFile=async(input)=>{
+  const file=input.files[0]; if(!file) return;
+  const key=localStorage.getItem('anthropic_api_key');
+  const trip=currentTripId?state.trips.find(t=>t.id===currentTripId):null;
+  const mainCur=trip?.mainCur||'TWD';
+  const her=state.settings.herName, him=state.settings.himName;
+
+  // preview
+  const reader=new FileReader();
+  reader.onload=(e)=>{ document.getElementById('receipt-img').src=e.target.result; document.getElementById('receipt-preview').style.display='block'; };
+  reader.readAsDataURL(file);
+  document.getElementById('receipt-upload-area').style.display='none';
+  document.getElementById('receipt-scanning').style.display='block';
+  document.getElementById('receipt-error').style.display='none';
+  document.getElementById('receipt-items-section').style.display='none';
+
+  try {
+    const base64=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
+    const mediaType=file.type||'image/jpeg';
+
+    const prompt=`你是收據辨識助理。請分析這張收據，將每個消費明細列出來，回傳 JSON，不要有任何其他文字。
+
+注意：
+- 金額使用含稅的最終金額
+- 品名翻譯成繁體中文簡短描述
+- 忽略小計、合計、稅額、服務費等非商品列
+- currency 根據收據判斷，日文收據通常是 JPY，預設 ${mainCur}
+- cat 分類：食（餐廳、飲料、食物）、住（住宿、日常用品）、行（交通）、樂（景點、紀念品、娛樂）、購物（服飾、雜貨）、其他
+- date 若收據有日期則填入 YYYY-MM-DD 格式，否則填 ${today()}
+- who 預設 "even"（均分）
+
+回傳格式：
+{
+  "date": "YYYY-MM-DD",
+  "currency": "JPY",
+  "items": [
+    { "id": 1, "desc": "繁體中文描述", "amount": 數字, "cat": "食", "who": "even" },
+    { "id": 2, "desc": "繁體中文描述", "amount": 數字, "cat": "樂", "who": "even" }
+  ]
+}`;
+
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6', max_tokens:1500,
+        messages:[{role:'user',content:[
+          {type:'image',source:{type:'base64',media_type:mediaType,data:base64}},
+          {type:'text',text:prompt}
+        ]}]
+      })
+    });
+
+    if(!resp.ok){ const err=await resp.json(); throw new Error(err.error?.message||'API 錯誤'); }
+    const data=await resp.json();
+    const text=data.content[0].text.trim();
+    const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
+
+    receiptMeta.date=parsed.date||today();
+    receiptMeta.currency=parsed.currency||mainCur;
+    const refs={JPY:0.213,USD:32.5,TWD:1};
+    receiptMeta.rate=refs[receiptMeta.currency]||1;
+
+    receiptItems=parsed.items.map((item,i)=>({
+      id: i, checked:true,
+      desc: item.desc||'',
+      amount: item.amount||0,
+      cat: item.cat||'其他',
+      who: item.who||'even'
+    }));
+
+    document.getElementById('receipt-scanning').style.display='none';
+    document.getElementById('receipt-items-section').style.display='block';
+
+    const total=receiptItems.reduce((s,i)=>s+i.amount,0);
+    document.getElementById('receipt-date-currency').textContent=receiptMeta.date+' · '+receiptMeta.currency+(receiptMeta.currency!=='TWD'?' (匯率'+receiptMeta.rate+')':'');
+    document.getElementById('receipt-total-display').textContent='合計 '+receiptMeta.currency+' '+total.toLocaleString();
+
+    renderReceiptItems();
+
+  } catch(e) {
+    document.getElementById('receipt-scanning').style.display='none';
+    document.getElementById('receipt-error').style.display='block';
+    document.getElementById('receipt-error').textContent='辨識失敗：'+e.message;
+  }
+};
+
+function renderReceiptItems(){
+  const her=state.settings.herName, him=state.settings.himName;
+  const cats=['食','住','行','樂','購物','其他'];
+  const listEl=document.getElementById('receipt-items-list');
+  listEl.innerHTML=receiptItems.map((item,idx)=>`
+    <div class="receipt-item ${item.checked?'':'skipped'}" id="ritem-${item.id}">
+      <div class="receipt-item-top">
+        <div class="receipt-item-check ${item.checked?'checked':''}" onclick="toggleReceiptItem(${item.id})">
+          ${item.checked?'✓':''}
+        </div>
+        <input class="receipt-item-desc" value="${item.desc}" onchange="updateReceiptItem(${item.id},'desc',this.value)" placeholder="項目說明">
+        <input class="receipt-item-amount" type="number" value="${item.amount}" onchange="updateReceiptItem(${item.id},'amount',parseFloat(this.value)||0)"> <span style="font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace">${receiptMeta.currency}</span>
+        <button class="receipt-del-btn" onclick="removeReceiptItem(${item.id})">✕</button>
+      </div>
+      <div class="receipt-item-bottom">
+        <select class="receipt-mini-select" onchange="updateReceiptItem(${item.id},'cat',this.value)">
+          ${cats.map(c=>`<option value="${c}" ${item.cat===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <select class="receipt-mini-select" onchange="updateReceiptItem(${item.id},'who',this.value)">
+          <option value="even" ${item.who==='even'?'selected':''}>均分</option>
+          <option value="her" ${item.who==='her'?'selected':''}>我的（${her}）</option>
+          <option value="him" ${item.who==='him'?'selected':''}>他的（${him}）</option>
+          <option value="self" ${item.who==='self'?'selected':''}>我自己</option>
+        </select>
+      </div>
+    </div>`).join('');
+
+  const checkedCount=receiptItems.filter(i=>i.checked).length;
+  document.getElementById('btn-receipt-save').textContent=`存入帳本（${checkedCount} 筆）→`;
+}
+
+window.toggleReceiptItem=(id)=>{
+  const item=receiptItems.find(i=>i.id===id); if(!item) return;
+  item.checked=!item.checked;
+  renderReceiptItems();
+};
+window.updateReceiptItem=(id,field,val)=>{
+  const item=receiptItems.find(i=>i.id===id); if(!item) return;
+  item[field]=val;
+  if(field==='amount'||field==='cat') renderReceiptItems();
+  else { const checkedCount=receiptItems.filter(i=>i.checked).length; document.getElementById('btn-receipt-save').textContent=`存入帳本（${checkedCount} 筆）→`; }
+};
+window.removeReceiptItem=(id)=>{
+  receiptItems=receiptItems.filter(i=>i.id!==id);
+  renderReceiptItems();
+};
+window.addManualReceiptRow=()=>{
+  const newId=Date.now();
+  receiptItems.push({id:newId,checked:true,desc:'',amount:0,cat:'食',who:'even'});
+  renderReceiptItems();
+  // focus new row desc
+  setTimeout(()=>{ const el=document.querySelector(`#ritem-${newId} .receipt-item-desc`); if(el) el.focus(); },100);
+};
+
+window.saveReceiptItems=async()=>{
+  const toSave=receiptItems.filter(i=>i.checked&&i.desc&&i.amount>0);
+  if(toSave.length===0){showToast('沒有可存入的項目');return;}
+
+  const cur=receiptMeta.currency;
+  const rate=receiptMeta.rate;
+  const date=receiptMeta.date;
+  const isForeign=cur!=='TWD';
+  const her=state.settings.herName, him=state.settings.himName;
+
+  setBusy('btn-receipt-save',true,'存入中…');
+  try{
+    const uid=currentUser.uid;
+    const colRef=currentTripId
+      ? collection(db,'users',uid,'trips',currentTripId,'expenses')
+      : collection(db,'users',uid,'expenses');
+
+    await Promise.all(toSave.map(item=>{
+      const twd=isForeign?Math.round(item.amount*rate):item.amount;
+      let herOwes=0,himOwes=0;
+      if(item.who==='even'){herOwes=twd/2;himOwes=twd/2;}
+      else if(item.who==='him'){himOwes=twd;}
+      else if(item.who==='her'||item.who==='self'){herOwes=twd;}
+      return addDoc(colRef,{
+        cat:item.cat, desc:item.desc, amount:item.amount,
+        currency:cur, rate, twd, payer:'her',
+        split:item.who==='even'?'even':item.who==='him'?'him':item.who==='self'?'self':'her',
+        herOwes, himOwes, date, createdAt:Date.now()
+      });
+    }));
+
+    closeModal('modal-receipt');
+    showToast(`已存入 ${toSave.length} 筆 ✓`);
+  }catch(e){showToast('儲存失敗：'+e.message);}
+  setBusy('btn-receipt-save',false,`存入帳本 →`);
+};
+
+// ── Utils ─────────────────────────────────────────────────
+function setBusy(id,busy,label){
+  const btn=document.getElementById(id);
+  if(btn){btn.disabled=busy;btn.textContent=label;}
+  const dot=document.getElementById('sync-dot');
+  if(dot) dot.className='sync-dot'+(busy?' syncing':'');
+}
+function today(){return new Date().toISOString().slice(0,10);}
+function showToast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2200);
+}
+</script>
+</body>
+</html>
+
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>J&P 帳本</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#f7f5f0;--surface:#fff;--ink:#1c1917;--ink-mid:#57534e;--ink-light:#a8a29e;
+  --border:#e7e5e4;--her:#b45309;--her-bg:#fef3c7;--him:#1d4ed8;--him-bg:#dbeafe;
+  --split:#059669;--split-bg:#d1fae5;--self:#7c3aed;--self-bg:#ede9fe;
+  --green:#16a34a;--red:#dc2626;--travel:#0e7490;--travel-bg:#cffafe;
+  --shadow-sm:0 1px 3px rgba(0,0,0,.08);--shadow:0 4px 16px rgba(0,0,0,.08);--radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;max-width:480px;margin:0 auto;padding-bottom:100px}
+
+/* ── Screens ── */
+#login-screen{position:fixed;inset:0;background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;padding:40px 32px;text-align:center}
+#login-screen h1{color:#fff;font-size:1.8rem;font-weight:700;margin-bottom:8px}
+#login-screen p{color:rgba(255,255,255,.45);font-size:.82rem;margin-bottom:48px;font-family:'DM Mono',monospace}
+.btn-google{display:flex;align-items:center;gap:12px;background:#fff;color:var(--ink);border:none;border-radius:12px;padding:14px 24px;font-size:.95rem;font-family:'Noto Sans TC',sans-serif;font-weight:700;cursor:pointer;box-shadow:var(--shadow)}
+.btn-google img{width:20px;height:20px}
+#denied-screen{position:fixed;inset:0;background:var(--ink);display:none;flex-direction:column;align-items:center;justify-content:center;z-index:999;padding:40px 32px;text-align:center}
+#denied-screen h2{color:#fca5a5;font-size:1.2rem;margin-bottom:12px}
+#denied-screen p{color:rgba(255,255,255,.5);font-size:.82rem;margin-bottom:8px;font-family:'DM Mono',monospace;line-height:1.6}
+#loading-screen{position:fixed;inset:0;background:var(--ink);display:none;align-items:center;justify-content:center;z-index:998}
+.spinner{width:32px;height:32px;border:3px solid rgba(255,255,255,.15);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#app{display:none}
+
+/* ── Nav ── */
+.nav-bar{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:var(--surface);border-top:1px solid var(--border);display:flex;z-index:200;padding-bottom:env(safe-area-inset-bottom)}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;padding:10px 4px 8px;cursor:pointer;user-select:none;color:var(--ink-light);font-size:.62rem;font-family:'DM Mono',monospace;letter-spacing:.04em;gap:4px;transition:color .15s}
+.nav-item .icon{font-size:1.25rem;line-height:1}
+.nav-item.active{color:var(--ink)}
+
+/* ── Pages ── */
+.page{display:none}.page.active{display:block}
+.page-header{background:var(--ink);color:#fff;padding:52px 20px 20px}
+.page-header h1{font-size:1.25rem;font-weight:700}
+.page-header p{font-size:.72rem;color:rgba(255,255,255,.45);margin-top:2px;font-family:'DM Mono',monospace}
+
+/* ── Balance Hero ── */
+.balance-hero{background:var(--ink);color:#fff;padding:0 20px 24px}
+.balance-chip{display:inline-block;padding:6px 14px;border-radius:99px;font-size:.7rem;font-family:'DM Mono',monospace;letter-spacing:.08em;margin-bottom:12px}
+.balance-chip.owe{background:rgba(220,38,38,.2);color:#fca5a5}
+.balance-chip.owed{background:rgba(22,163,74,.2);color:#86efac}
+.balance-chip.even{background:rgba(255,255,255,.1);color:rgba(255,255,255,.6)}
+.balance-main{font-size:2.6rem;font-family:'DM Mono',monospace;font-weight:500;line-height:1}
+.balance-sub{font-size:.8rem;color:rgba(255,255,255,.5);margin-top:8px}
+.balance-pills{display:flex;gap:8px;margin-top:20px}
+.balance-pill{flex:1;background:rgba(255,255,255,.07);border-radius:10px;padding:12px;text-align:center}
+.balance-pill .pill-label{font-size:.62rem;color:rgba(255,255,255,.4);font-family:'DM Mono',monospace;letter-spacing:.08em;margin-bottom:4px}
+.balance-pill .pill-val{font-family:'DM Mono',monospace;font-size:1rem;font-weight:500}
+.pill-her{color:#fcd34d}.pill-him{color:#93c5fd}
+
+/* ── Deposit ── */
+.deposit-bar{margin:16px;background:var(--surface);border-radius:var(--radius);padding:14px 16px;border:1px solid var(--border);box-shadow:var(--shadow-sm);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.deposit-info .label{font-size:.62rem;font-family:'DM Mono',monospace;letter-spacing:.08em;color:var(--ink-light);margin-bottom:3px}
+.deposit-info .val{font-family:'DM Mono',monospace;font-size:1.1rem;font-weight:500}
+.deposit-info .val.positive{color:var(--green)}.deposit-info .val.negative{color:var(--red)}
+.btn-deposit{padding:8px 16px;background:var(--ink);color:#fff;border:none;border-radius:8px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:500;cursor:pointer;white-space:nowrap;flex-shrink:0}
+
+/* ── Section head ── */
+.section-head{display:flex;align-items:center;justify-content:space-between;padding:0 16px;margin-bottom:10px}
+.section-head .s-title{font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)}
+.section-head .s-action{font-size:.72rem;color:var(--ink-mid);cursor:pointer;text-decoration:underline;text-decoration-color:var(--border)}
+
+/* ── Expense cards ── */
+.expense-list{padding:0 16px;display:flex;flex-direction:column;gap:8px}
+.expense-card{background:var(--surface);border-radius:var(--radius);padding:14px 16px;border:1px solid var(--border);box-shadow:var(--shadow-sm);display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:start;position:relative;animation:fadeUp .2s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.expense-card .e-cat{font-size:.62rem;font-family:'DM Mono',monospace;letter-spacing:.08em;color:var(--ink-light);grid-column:1/-1;margin-bottom:2px}
+.expense-card .e-desc{font-size:.92rem;font-weight:500}
+.expense-card .e-meta{font-size:.7rem;color:var(--ink-mid);margin-top:2px}
+.expense-card .e-right{text-align:right}
+.expense-card .e-amount{font-family:'DM Mono',monospace;font-size:1rem;font-weight:500}
+.expense-card .e-split-tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.62rem;font-family:'DM Mono',monospace;margin-top:4px}
+.tag-her{background:var(--her-bg);color:var(--her)}.tag-him{background:var(--him-bg);color:var(--him)}
+.tag-split{background:var(--split-bg);color:var(--split)}.tag-self{background:var(--self-bg);color:var(--self)}
+.e-delete{position:absolute;top:10px;right:10px;background:none;border:none;font-size:.75rem;color:var(--border);cursor:pointer;padding:2px 4px;transition:color .15s}
+.e-delete:hover{color:var(--red)}
+.e-stripe{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:14px 0 0 14px}
+
+/* ── FAB ── */
+.fab{position:fixed;bottom:72px;right:calc(50% - 220px);width:52px;height:52px;background:var(--ink);color:#fff;border:none;border-radius:50%;font-size:1.5rem;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.25);z-index:150;display:flex;align-items:center;justify-content:center;transition:transform .15s}
+.fab:active{transform:scale(.94)}
+@media(max-width:480px){.fab{right:20px}}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:300;display:none;align-items:flex-end;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:92vh;overflow-y:auto;padding:0 0 env(safe-area-inset-bottom);animation:slideUp .25s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.modal-handle{width:36px;height:4px;background:var(--border);border-radius:99px;margin:12px auto 0}
+.modal-header{padding:16px 20px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+.modal-title{font-size:1rem;font-weight:700}
+.modal-close{background:var(--bg);border:none;width:30px;height:30px;border-radius:50%;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--ink-mid)}
+.modal-body{padding:20px}
+
+/* ── Form ── */
+.form-row{margin-bottom:16px}
+.form-label{display:block;font-size:.68rem;font-family:'DM Mono',monospace;letter-spacing:.08em;color:var(--ink-light);margin-bottom:6px}
+.form-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:.95rem;font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink);outline:none;transition:border-color .15s;-webkit-appearance:none}
+.form-input:focus{border-color:var(--ink);background:#fff}
+.chip-group{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:7px 14px;border-radius:99px;border:1.5px solid var(--border);background:var(--bg);font-size:.78rem;cursor:pointer;transition:all .15s;user-select:none;font-family:'Noto Sans TC',sans-serif;color:var(--ink-mid)}
+.chip.active-her{background:var(--her-bg);border-color:var(--her);color:var(--her);font-weight:500}
+.chip.active-him{background:var(--him-bg);border-color:var(--him);color:var(--him);font-weight:500}
+.chip.active-split{background:var(--split-bg);border-color:var(--split);color:var(--split);font-weight:500}
+.chip.active-self{background:var(--self-bg);border-color:var(--self);color:var(--self);font-weight:500}
+.chip.active-cat,.chip.active-cur,.chip.active-ink{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:500}
+.split-custom-row{display:none;gap:10px;margin-top:10px}
+.split-custom-row.show{display:grid;grid-template-columns:1fr 1fr}
+.rate-hint{font-size:.68rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace}
+.converted-amount{font-size:.78rem;color:var(--ink-mid);font-family:'DM Mono',monospace;margin-top:4px}
+.btn-submit{width:100%;padding:15px;background:var(--ink);color:#fff;border:none;border-radius:12px;font-size:1rem;font-family:'Noto Sans TC',sans-serif;font-weight:700;cursor:pointer;letter-spacing:.03em;margin-top:8px;transition:opacity .15s}
+.btn-submit:active{opacity:.8}.btn-submit:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Stats ── */
+.stats-section{margin:16px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow-sm);overflow:hidden}
+.stats-section-title{padding:14px 16px 10px;font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);border-bottom:1px solid var(--border)}
+.stat-row{display:flex;align-items:center;padding:12px 16px;gap:12px;border-bottom:1px solid var(--border)}
+.stat-row:last-child{border-bottom:none}
+.stat-cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.stat-name{font-size:.85rem;flex:1}
+.stat-bar-wrap{width:80px;height:4px;background:var(--border);border-radius:99px;flex-shrink:0}
+.stat-bar{height:100%;border-radius:99px;transition:width .4s ease}
+.stat-val{font-family:'DM Mono',monospace;font-size:.8rem;color:var(--ink-mid);width:64px;text-align:right;flex-shrink:0}
+
+/* ── Settle ── */
+.settle-item{display:flex;align-items:center;padding:12px 16px;gap:10px;border-bottom:1px solid var(--border)}
+.settle-item:last-child{border-bottom:none}
+.settle-dot{width:8px;height:8px;background:var(--green);border-radius:50%;flex-shrink:0}
+.settle-info{flex:1}
+.settle-info .s-desc{font-size:.85rem}
+.settle-info .s-date{font-size:.68rem;color:var(--ink-light);font-family:'DM Mono',monospace;margin-top:2px}
+.settle-amount{font-family:'DM Mono',monospace;font-size:.9rem;color:var(--green);font-weight:500}
+.settle-del{background:none;border:none;color:var(--border);cursor:pointer;font-size:.75rem;padding:2px 4px}
+.settle-del:hover{color:var(--red)}
+.btn-settle{width:100%;padding:14px;background:var(--green);color:#fff;border:none;border-radius:12px;font-size:.95rem;font-family:'Noto Sans TC',sans-serif;font-weight:700;cursor:pointer;margin-bottom:16px}
+
+/* ── Settings ── */
+.settings-section{margin:16px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden}
+.settings-row{display:flex;align-items:center;padding:14px 16px;gap:12px;border-bottom:1px solid var(--border)}
+.settings-row:last-child{border-bottom:none}
+.settings-row label{font-size:.72rem;font-family:'DM Mono',monospace;color:var(--ink-light);letter-spacing:.06em;white-space:nowrap}
+.settings-row .form-input{flex:1;padding:8px 12px;font-size:.88rem}
+.user-row{display:flex;align-items:center;gap:10px;padding:14px 16px}
+.user-avatar{width:36px;height:36px;border-radius:50%;object-fit:cover}
+.user-info{flex:1}
+.user-name{font-size:.88rem;font-weight:500}
+.user-email{font-size:.7rem;color:var(--ink-light);font-family:'DM Mono',monospace;margin-top:2px}
+.btn-signout{background:none;border:1.5px solid var(--border);color:var(--ink-mid);border-radius:8px;padding:8px 14px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer;white-space:nowrap}
+.btn-signout-small{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:10px 20px;font-size:.82rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer;margin-top:16px}
+
+/* ── Month scroller ── */
+.month-scroller{display:flex;gap:8px;padding:0 16px;overflow-x:auto;scrollbar-width:none;margin-bottom:14px}
+.month-scroller::-webkit-scrollbar{display:none}
+.month-chip{padding:6px 14px;border-radius:99px;border:1.5px solid var(--border);background:var(--surface);font-size:.72rem;font-family:'DM Mono',monospace;cursor:pointer;white-space:nowrap;color:var(--ink-mid);transition:all .15s;flex-shrink:0}
+.month-chip.active{background:var(--ink);border-color:var(--ink);color:#fff}
+
+/* ── Travel page ── */
+.trip-card{margin:0 16px 12px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow-sm);overflow:hidden;cursor:pointer;transition:box-shadow .15s}
+.trip-card:active{box-shadow:none}
+.trip-card-inner{padding:16px}
+.trip-card-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px}
+.trip-name{font-size:1rem;font-weight:700}
+.trip-status{font-size:.65rem;font-family:'DM Mono',monospace;padding:3px 10px;border-radius:99px}
+.trip-status.active{background:var(--travel-bg);color:var(--travel)}
+.trip-status.archived{background:var(--bg);color:var(--ink-light)}
+.trip-dates{font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace;margin-bottom:10px}
+.trip-summary{display:flex;gap:12px}
+.trip-stat{flex:1;text-align:center}
+.trip-stat .ts-val{font-family:'DM Mono',monospace;font-size:1rem;font-weight:500;color:var(--ink)}
+.trip-stat .ts-label{font-size:.62rem;color:var(--ink-light);font-family:'DM Mono',monospace;margin-top:2px}
+.trip-stripe{height:3px;background:linear-gradient(90deg,var(--travel),var(--him))}
+
+/* ── Trip detail header ── */
+.trip-header{background:var(--travel);color:#fff;padding:52px 20px 20px}
+.trip-header h1{font-size:1.1rem;font-weight:700}
+.trip-header p{font-size:.72rem;color:rgba(255,255,255,.55);margin-top:2px;font-family:'DM Mono',monospace}
+.trip-total-hero{background:var(--travel);color:#fff;padding:0 20px 20px}
+.trip-total-hero .t-label{font-size:.7rem;color:rgba(255,255,255,.5);font-family:'DM Mono',monospace;margin-bottom:6px}
+.trip-total-hero .t-amount{font-size:2.4rem;font-family:'DM Mono',monospace;font-weight:500}
+.trip-pills{display:flex;gap:8px;margin-top:16px}
+.trip-pill{flex:1;background:rgba(255,255,255,.1);border-radius:10px;padding:10px;text-align:center}
+.trip-pill .tp-label{font-size:.6rem;color:rgba(255,255,255,.45);font-family:'DM Mono',monospace;margin-bottom:3px}
+.trip-pill .tp-val{font-family:'DM Mono',monospace;font-size:.88rem;font-weight:500}
+
+/* ── Cross-trip compare ── */
+.compare-card{margin:16px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow-sm);overflow:hidden}
+.compare-row{display:flex;align-items:center;padding:12px 16px;gap:10px;border-bottom:1px solid var(--border)}
+.compare-row:last-child{border-bottom:none}
+.compare-trip-name{font-size:.82rem;flex:1;font-weight:500}
+.compare-trip-date{font-size:.65rem;color:var(--ink-light);font-family:'DM Mono',monospace}
+.compare-amount{font-family:'DM Mono',monospace;font-size:.88rem;font-weight:500;color:var(--travel);flex-shrink:0}
+
+/* ── Sync ── */
+.sync-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-left:6px;vertical-align:middle}
+.sync-dot.syncing{background:#f59e0b;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Receipt items ── */
+.receipt-item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;position:relative}
+.receipt-item.skipped{opacity:.45}
+.receipt-item-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.receipt-item-check{width:20px;height:20px;border-radius:6px;border:2px solid var(--border);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.75rem;transition:all .15s;background:#fff}
+.receipt-item-check.checked{background:var(--ink);border-color:var(--ink);color:#fff}
+.receipt-item-desc{flex:1;font-size:.88rem;font-weight:500;border:none;background:transparent;outline:none;font-family:'Noto Sans TC',sans-serif;color:var(--ink);padding:0}
+.receipt-item-amount{font-family:'DM Mono',monospace;font-size:.88rem;font-weight:500;border:none;background:transparent;outline:none;text-align:right;width:72px;color:var(--ink);padding:0}
+.receipt-item-bottom{display:flex;gap:6px;align-items:center}
+.receipt-mini-select{padding:5px 8px;border:1.5px solid var(--border);border-radius:8px;font-size:.75rem;font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink);outline:none;cursor:pointer;flex:1}
+.receipt-del-btn{background:none;border:none;color:var(--border);cursor:pointer;font-size:.8rem;padding:4px;flex-shrink:0}
+.receipt-del-btn:hover{color:var(--red)}
+.empty-state{text-align:center;padding:48px 24px;color:var(--ink-light)}
+.empty-state .e-icon{font-size:2.5rem;margin-bottom:12px}
+.empty-state .e-text{font-size:.88rem}
+
+/* ── Toast ── */
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);background:var(--ink);color:#fff;padding:10px 20px;border-radius:99px;font-size:.82rem;z-index:500;transition:transform .3s ease;white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ── Back button ── */
+.back-btn{display:flex;align-items:center;gap:6px;font-size:.82rem;color:rgba(255,255,255,.7);cursor:pointer;margin-bottom:8px;user-select:none}
+.back-btn:active{opacity:.7}
+</style>
+</head>
+<body>
+
+<!-- Screens -->
+<div id="login-screen">
+  <h1>💑 J&amp;P 帳本</h1>
+  <p>請用授權的 Google 帳號登入</p>
+  <button class="btn-google" onclick="signIn()">
+    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="G">使用 Google 登入
+  </button>
+</div>
+<div id="denied-screen">
+  <h2>⛔ 無存取權限</h2>
+  <p id="denied-email"></p>
+  <p>此帳號未在授權名單內<br>請聯絡佩璽新增權限</p>
+  <button class="btn-signout-small" onclick="signOut()">登出並切換帳號</button>
+</div>
+<div id="loading-screen"><div class="spinner"></div></div>
+
+<!-- App -->
+<div id="app">
+
+<!-- HOME -->
+<div class="page active" id="page-home">
+  <div class="page-header">
+    <h1>J&amp;P 帳本 <span class="sync-dot" id="sync-dot"></span></h1>
+    <p>日常帳本</p>
+  </div>
+  <div class="balance-hero">
+    <div class="balance-chip even" id="balance-chip">平衡</div>
+    <div class="balance-main" id="balance-main">$0</div>
+    <div class="balance-sub" id="balance-sub">目前不需還款</div>
+    <div class="balance-pills">
+      <div class="balance-pill"><div class="pill-label" id="her-pill-label">她 付出</div><div class="pill-val pill-her" id="her-pill">$0</div></div>
+      <div class="balance-pill"><div class="pill-label">總花費</div><div class="pill-val" id="total-pill">$0</div></div>
+      <div class="balance-pill"><div class="pill-label" id="him-pill-label">他 付出</div><div class="pill-val pill-him" id="him-pill">$0</div></div>
+    </div>
+  </div>
+  <div class="deposit-bar">
+    <div class="deposit-info"><div class="label">預付金餘額</div><div class="val positive" id="deposit-val">$0</div></div>
+    <button class="btn-deposit" onclick="openDepositModal()">＋ 儲值</button>
+  </div>
+  <div id="deposit-history" style="margin:-8px 16px 16px;display:none">
+    <div style="background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius) var(--radius);overflow:hidden" id="deposit-history-list"></div>
+  </div>
+  <div style="margin-bottom:10px"><div class="month-scroller" id="month-scroller"></div></div>
+  <div class="section-head">
+    <span class="s-title" id="list-count">紀錄</span>
+    <span class="s-action" onclick="showSettle()">查看結清 →</span>
+  </div>
+  <div class="expense-list" id="expense-list"></div>
+</div>
+
+<!-- TRAVEL LIST -->
+<div class="page" id="page-travel">
+  <div class="page-header">
+    <h1>✈️ 旅遊帳本</h1>
+    <p>每次出國獨立記帳</p>
+  </div>
+  <div style="padding:16px 16px 8px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)" id="trip-list-label">行程</div>
+    <button onclick="openNewTripModal()" style="padding:7px 14px;background:var(--travel);color:#fff;border:none;border-radius:8px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer">＋ 新增行程</button>
+  </div>
+  <div id="trip-list"></div>
+  <!-- Cross compare -->
+  <div style="padding:16px 16px 8px;margin-top:8px">
+    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">跨旅遊比較</div>
+  </div>
+  <div id="cross-compare"></div>
+</div>
+
+<!-- TRIP DETAIL -->
+<div class="page" id="page-trip-detail">
+  <div class="trip-header">
+    <div class="back-btn" onclick="backToTripList()">← 返回</div>
+    <h1 id="trip-detail-name">行程名稱</h1>
+    <p id="trip-detail-dates"></p>
+  </div>
+  <div class="trip-total-hero">
+    <div class="t-label">總花費（台幣）</div>
+    <div class="t-amount" id="trip-total-twd">$0</div>
+    <div class="trip-pills">
+      <div class="trip-pill"><div class="tp-label" id="trip-her-label">她</div><div class="tp-val" id="trip-her-paid">$0</div></div>
+      <div class="trip-pill"><div class="tp-label">筆數</div><div class="tp-val" id="trip-count">0</div></div>
+      <div class="trip-pill"><div class="tp-label" id="trip-him-label">他</div><div class="tp-val" id="trip-him-paid">$0</div></div>
+    </div>
+  </div>
+  <!-- day indicator -->
+  <div id="trip-day-indicator" style="margin:12px 16px 0;font-size:.78rem;color:var(--ink-mid);font-family:'DM Mono',monospace"></div>
+  <div id="trip-budget-block" style="margin:12px 16px 0"></div>
+  <!-- stats toggle -->
+  <div style="margin:12px 16px 0;display:flex;gap:8px">
+    <div class="chip active-ink" id="trip-tab-list" onclick="switchTripTab('list')" style="font-size:.75rem">明細</div>
+    <div class="chip" id="trip-tab-stats" onclick="switchTripTab('stats')" style="font-size:.75rem">統計</div>
+    <div class="chip" id="trip-tab-settle" onclick="switchTripTab('settle')" style="font-size:.75rem">結清</div>
+  </div>
+  <div id="trip-list-panel" style="margin-top:12px">
+    <div class="month-scroller" id="trip-day-scroller" style="margin-bottom:10px"></div>
+    <div class="section-head"><span class="s-title" id="trip-expense-count">紀錄</span></div>
+    <div class="expense-list" id="trip-expense-list"></div>
+  </div>
+  <div id="trip-stats-panel" style="margin-top:12px;display:none;padding-bottom:20px">
+    <div id="trip-stats-content"></div>
+  </div>
+  <div id="trip-settle-panel" style="margin-top:12px;display:none;padding:0 16px 20px">
+    <div id="trip-settle-status" style="margin-bottom:16px"></div>
+    <div class="form-row"><label class="form-label">還款金額</label><input class="form-input" id="trip-settle-amount" type="number" placeholder="0" style="font-family:'DM Mono',monospace"></div>
+    <div class="form-row"><label class="form-label">備註（選填）</label><input class="form-input" id="trip-settle-note" placeholder="例：Line Pay 轉帳"></div>
+    <button class="btn-settle" onclick="doTripSettle()">確認還款 ✓</button>
+    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">還款紀錄</div>
+    <div style="background:var(--bg);border-radius:var(--radius);overflow:hidden" id="trip-settle-history"></div>
+  </div>
+  <!-- archive button -->
+  <div style="padding:16px;margin-top:8px" id="trip-archive-row"></div>
+</div>
+
+<!-- STATS -->
+<div class="page" id="page-stats">
+  <div class="page-header"><h1>統計</h1><p>日常帳本</p></div>
+  <div id="stats-content" style="padding-bottom:20px"></div>
+</div>
+
+<!-- SETTINGS -->
+<div class="page" id="page-settings">
+  <div class="page-header"><h1>設定</h1><p>帳號與個人化</p></div>
+  <div style="padding:16px 16px 0"><div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">登入帳號</div></div>
+  <div class="settings-section">
+    <div class="user-row">
+      <img class="user-avatar" id="user-avatar" src="" alt="">
+      <div class="user-info"><div class="user-name" id="user-name"></div><div class="user-email" id="user-email"></div></div>
+      <button class="btn-signout" onclick="signOut()">登出</button>
+    </div>
+  </div>
+  <div style="padding:16px 16px 0"><div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">名稱設定</div></div>
+  <div class="settings-section">
+    <div class="settings-row"><label>她的名字</label><input class="form-input" id="her-name-input" placeholder="佩璽" oninput="saveSettings()"></div>
+    <div class="settings-row"><label>他的名字</label><input class="form-input" id="him-name-input" placeholder="男友" oninput="saveSettings()"></div>
+  </div>
+
+  <div style="padding:16px 16px 0">
+    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:6px">AI 收據辨識</div>
+    <div style="font-size:.72rem;color:var(--ink-light);margin-bottom:10px">API Key 只存在你的裝置，不會上傳。有效期過後清除即可。</div>
+  </div>
+  <div class="settings-section">
+    <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+      <label>Anthropic API Key</label>
+      <div style="display:flex;gap:8px;width:100%">
+        <input class="form-input" id="api-key-input" type="password" placeholder="sk-ant-..." style="flex:1;font-family:'DM Mono',monospace;font-size:.82rem">
+        <button onclick="saveApiKey()" style="padding:10px 16px;background:var(--ink);color:#fff;border:none;border-radius:10px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer;white-space:nowrap">儲存</button>
+      </div>
+      <div id="api-key-status" style="font-size:.7rem;font-family:'DM Mono',monospace;color:var(--ink-light)"></div>
+      <button onclick="clearApiKey()" style="background:none;border:1.5px solid var(--border);color:var(--ink-light);border-radius:8px;padding:7px 14px;font-size:.75rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer">清除 API Key</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /app -->
+
+<!-- Modals -->
+<!-- Add Expense (daily) -->
+<div class="modal-overlay" id="modal-add">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <span class="modal-title">新增消費</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="openReceiptScan()" style="padding:6px 12px;background:var(--travel-bg);color:var(--travel);border:1.5px solid var(--travel);border-radius:8px;font-size:.78rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer">📷 拍收據</button>
+        <button class="modal-close" onclick="closeModal('modal-add')">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" id="modal-add-body">
+      <!-- filled by buildExpenseForm() -->
+    </div>
+  </div>
+</div>
+
+<!-- Receipt Scan Modal -->
+<div class="modal-overlay" id="modal-receipt">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header"><span class="modal-title">📷 拍收據辨識</span><button class="modal-close" onclick="closeModal('modal-receipt')">✕</button></div>
+    <div class="modal-body">
+      <!-- Step 1: Upload -->
+      <div id="receipt-upload-area" style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;margin-bottom:16px" onclick="document.getElementById('receipt-file-input').click()">
+        <div style="font-size:2rem;margin-bottom:8px">📄</div>
+        <div style="font-size:.88rem;color:var(--ink-mid)">拍照 或 從相簿／檔案選取</div>
+        <div style="font-size:.72rem;color:var(--ink-light);margin-top:4px;font-family:'DM Mono',monospace">支援 JPG、PNG、HEIC · 電子發票截圖也可以</div>
+      </div>
+      <input type="file" id="receipt-file-input" accept="image/*" style="display:none" onchange="handleReceiptFile(this)">
+
+      <!-- Preview -->
+      <div id="receipt-preview" style="display:none;margin-bottom:12px">
+        <img id="receipt-img" style="width:100%;border-radius:10px;max-height:200px;object-fit:contain;background:var(--bg)">
+      </div>
+
+      <!-- Scanning -->
+      <div id="receipt-scanning" style="display:none;text-align:center;padding:24px">
+        <div class="spinner" style="margin:0 auto 12px;border-top-color:var(--travel)"></div>
+        <div style="font-size:.82rem;color:var(--ink-mid)">AI 辨識中，分析明細…</div>
+      </div>
+
+      <!-- Error -->
+      <div id="receipt-error" style="display:none;color:var(--red);font-size:.82rem;padding:12px;background:#fef2f2;border-radius:8px;margin-bottom:12px"></div>
+
+      <!-- Step 2: Item list -->
+      <div id="receipt-items-section" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">辨識明細</div>
+            <div style="font-size:.72rem;color:var(--ink-mid);margin-top:2px" id="receipt-date-currency"></div>
+          </div>
+          <div style="font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace" id="receipt-total-display"></div>
+        </div>
+
+        <!-- Items list -->
+        <div id="receipt-items-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+
+        <!-- Add manual row -->
+        <button onclick="addManualReceiptRow()" style="width:100%;padding:10px;background:none;border:1.5px dashed var(--border);border-radius:10px;font-size:.82rem;color:var(--ink-mid);cursor:pointer;font-family:'Noto Sans TC',sans-serif">＋ 手動新增一列</button>
+
+        <!-- Submit -->
+        <button class="btn-submit" onclick="saveReceiptItems()" style="margin-top:12px" id="btn-receipt-save">全部存入帳本 →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New Trip -->
+<div class="modal-overlay" id="modal-new-trip">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header"><span class="modal-title">新增行程</span><button class="modal-close" onclick="closeModal('modal-new-trip')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label class="form-label">行程名稱</label><input class="form-input" id="trip-name-input" placeholder="例：2026 京都行"></div>
+      <div class="form-row"><label class="form-label">出發日期</label><input class="form-input" id="trip-start-input" type="date"></div>
+      <div class="form-row"><label class="form-label">回程日期</label><input class="form-input" id="trip-end-input" type="date"></div>
+      <div class="form-row">
+        <label class="form-label">主要外幣</label>
+        <div class="chip-group" id="trip-cur-chips">
+          <div class="chip active-ink" data-cur="JPY" onclick="selectTripCur(this)">JPY 日圓</div>
+          <div class="chip" data-cur="USD" onclick="selectTripCur(this)">USD 美元</div>
+          <div class="chip" data-cur="TWD" onclick="selectTripCur(this)">台幣為主</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">總預算（台幣，選填）</label>
+        <input class="form-input" id="trip-budget-input" type="number" placeholder="例：150000" style="font-family:'DM Mono',monospace">
+      </div>
+      <button class="btn-submit" id="btn-new-trip-submit" onclick="createTrip()">建立行程 ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deposit -->
+<div class="modal-overlay" id="modal-deposit">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header"><span class="modal-title">預付金儲值</span><button class="modal-close" onclick="closeModal('modal-deposit')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label class="form-label">他給你的金額（台幣）</label><input class="form-input" id="deposit-input" type="number" placeholder="例：30000" style="font-family:'DM Mono',monospace"></div>
+      <div class="form-row"><label class="form-label">日期</label><input class="form-input" id="deposit-date" type="date"></div>
+      <div class="form-row"><label class="form-label">備註（選填）</label><input class="form-input" id="deposit-note" placeholder="例：日本旅遊預付"></div>
+      <button class="btn-submit" id="btn-deposit-submit" onclick="addDeposit()">儲值 ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settle (daily) -->
+<div class="modal-overlay" id="modal-settle">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header"><span class="modal-title">還款結清</span><button class="modal-close" onclick="closeModal('modal-settle')">✕</button></div>
+    <div class="modal-body">
+      <div id="settle-status-display" style="margin-bottom:16px"></div>
+      <div class="form-row"><label class="form-label">還款金額</label><input class="form-input" id="settle-amount-input" type="number" placeholder="0" style="font-family:'DM Mono',monospace"></div>
+      <div class="form-row"><label class="form-label">備註（選填）</label><input class="form-input" id="settle-note-input" placeholder="例：Line Pay 轉帳"></div>
+      <button class="btn-settle" onclick="doSettle()">確認還款 ✓</button>
+      <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">還款紀錄</div>
+      <div style="background:var(--bg);border-radius:var(--radius);overflow:hidden" id="settle-history-list"></div>
+    </div>
+  </div>
+</div>
+
+<button class="fab" onclick="openAddModal()" id="fab-btn">＋</button>
+<nav class="nav-bar">
+  <div class="nav-item active" onclick="switchPage('home')" id="nav-home"><span class="icon">💳</span>帳本</div>
+  <div class="nav-item" onclick="switchPage('travel')" id="nav-travel"><span class="icon">✈️</span>旅遊</div>
+  <div class="nav-item" onclick="switchPage('stats')" id="nav-stats"><span class="icon">📊</span>統計</div>
+  <div class="nav-item" onclick="switchPage('settings')" id="nav-settings"><span class="icon">⚙️</span>設定</div>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey:"AIzaSyBhNAhJR2QbjVIbup_z0ZTn-oa3iVxPJu0",
+  authDomain:"jp-payfee.firebaseapp.com",
+  projectId:"jp-payfee",
+  storageBucket:"jp-payfee.firebasestorage.app",
+  messagingSenderId:"751575688832",
+  appId:"1:751575688832:web:056f46f8e053371cdb2865"
+};
+
+const ALLOWED_EMAILS = [
+  'peishi0217@gmail.com',
+  // 'boyfriend@gmail.com',
+];
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const provider = new GoogleAuthProvider();
+
+let currentUser = null;
+let unsubs = [];
+let state = {
+  settings: { herName:'佩璽', himName:'男友' },
+  expenses: [], deposits: [], settlements: [],
+  trips: [], tripExpenses: {}, tripSettlements: {}
+};
+let formState = { cat:null, currency:'TWD', split:'even', payer:'her' };
+let activeMonthFilter = null;
+let currentTripId = null;
+let tripCurFilter = null;
+let tripTabActive = 'list';
+let newTripCur = 'JPY';
+
+// ── Auth ─────────────────────────────────────────────────
+window.signIn = async () => { try { await signInWithPopup(auth,provider); } catch(e) { showToast('登入失敗'); } };
+window.signOut = async () => { unsubs.forEach(u=>u()); unsubs=[]; await fbSignOut(auth); };
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { showScreen('login'); return; }
+  if (!ALLOWED_EMAILS.includes(user.email)) {
+    document.getElementById('denied-email').textContent = '目前登入：'+user.email;
+    showScreen('denied'); await fbSignOut(auth); return;
+  }
+  currentUser = user;
+  document.getElementById('user-avatar').src = user.photoURL||'';
+  document.getElementById('user-name').textContent = user.displayName||'';
+  document.getElementById('user-email').textContent = user.email;
+  showScreen('loading');
+  subscribeData();
+});
+
+function showScreen(name) {
+  document.getElementById('login-screen').style.display = name==='login'?'flex':'none';
+  document.getElementById('denied-screen').style.display = name==='denied'?'flex':'none';
+  document.getElementById('loading-screen').style.display = name==='loading'?'flex':'none';
+  document.getElementById('app').style.display = name==='app'?'block':'none';
+}
+
+// ── Firestore ─────────────────────────────────────────────
+function subscribeData() {
+  const uid = currentUser.uid;
+  let loaded = {e:false,d:false,s:false,cfg:false,t:false};
+  function checkReady() {
+    if (Object.values(loaded).every(Boolean)) { showScreen('app'); render(); loadSettingsUI(); }
+  }
+  unsubs.push(onSnapshot(doc(db,'users',uid,'config','settings'), snap => {
+    if (snap.exists()) state.settings = {herName:'佩璽',himName:'男友',...snap.data()};
+    loaded.cfg=true; checkReady(); render(); loadSettingsUI();
+  }));
+  unsubs.push(onSnapshot(query(collection(db,'users',uid,'expenses'),orderBy('date','desc')), snap => {
+    state.expenses = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.e=true; checkReady(); render();
+  }));
+  unsubs.push(onSnapshot(query(collection(db,'users',uid,'deposits'),orderBy('date','desc')), snap => {
+    state.deposits = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.d=true; checkReady(); render();
+  }));
+  unsubs.push(onSnapshot(query(collection(db,'users',uid,'settlements'),orderBy('date','desc')), snap => {
+    state.settlements = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.s=true; checkReady(); render();
+  }));
+  unsubs.push(onSnapshot(query(collection(db,'users',uid,'trips'),orderBy('startDate','desc')), snap => {
+    state.trips = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.t=true; checkReady(); renderTravelList();
+    // subscribe trip expenses & settlements
+    state.trips.forEach(trip => {
+      if (!state.tripExpenses[trip.id]) {
+        unsubs.push(onSnapshot(query(collection(db,'users',uid,'trips',trip.id,'expenses'),orderBy('date','desc')), s => {
+          state.tripExpenses[trip.id] = s.docs.map(d=>({id:d.id,...d.data()}));
+          renderTravelList();
+          if (currentTripId===trip.id) renderTripDetail();
+        }));
+        unsubs.push(onSnapshot(query(collection(db,'users',uid,'trips',trip.id,'settlements'),orderBy('date','desc')), s => {
+          state.tripSettlements[trip.id] = s.docs.map(d=>({id:d.id,...d.data()}));
+          if (currentTripId===trip.id) renderTripDetail();
+        }));
+      }
+    });
+  }));
+}
+
+// ── Nav ──────────────────────────────────────────────────
+window.switchPage = (name) => {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  document.getElementById('nav-'+name) && document.getElementById('nav-'+name).classList.add('active');
+  const showFab = ['home','trip-detail'].includes(name);
+  document.getElementById('fab-btn').style.display = showFab?'flex':'none';
+  if (name==='stats') renderStats();
+  if (name==='settings') loadSettingsUI();
+  if (name==='travel') renderTravelList();
+};
+
+window.backToTripList = () => {
+  currentTripId = null;
+  switchPage('travel');
+};
+
+// ── Modal ─────────────────────────────────────────────────
+window.openModal = (id) => { document.getElementById(id).classList.add('open'); document.body.style.overflow='hidden'; };
+window.closeModal = (id) => { document.getElementById(id).classList.remove('open'); document.body.style.overflow=''; };
+document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)closeModal(o.id);}));
+
+// ── Expense Form Builder ──────────────────────────────────
+function buildExpenseForm(isTrip=false, tripMainCur='TWD') {
+  const her = state.settings.herName, him = state.settings.himName;
+  const curs = isTrip && tripMainCur!=='TWD'
+    ? `<div class="chip active-cur" data-cur="${tripMainCur}" onclick="selectCur(this)">${tripMainCur}</div>
+       <div class="chip" data-cur="TWD" onclick="selectCur(this)">TWD</div>
+       <div class="chip" data-cur="${tripMainCur==='JPY'?'USD':'JPY'}" onclick="selectCur(this)">${tripMainCur==='JPY'?'USD':'JPY'}</div>`
+    : `<div class="chip active-cur" data-cur="TWD" onclick="selectCur(this)">TWD</div>
+       <div class="chip" data-cur="JPY" onclick="selectCur(this)">JPY</div>
+       <div class="chip" data-cur="USD" onclick="selectCur(this)">USD</div>`;
+
+  document.getElementById('modal-add-body').innerHTML = `
+    <div class="form-row">
+      <label class="form-label">類別</label>
+      <div class="chip-group" id="cat-chips">
+        <div class="chip" data-cat="食" onclick="selectCat(this)">🍜 食</div>
+        <div class="chip" data-cat="住" onclick="selectCat(this)">🏨 住</div>
+        <div class="chip" data-cat="行" onclick="selectCat(this)">🚇 行</div>
+        <div class="chip" data-cat="購物" onclick="selectCat(this)">🛍 購物</div>
+        <div class="chip" data-cat="樂" onclick="selectCat(this)">🎡 樂</div>
+        <div class="chip" data-cat="其他" onclick="selectCat(this)">📌 其他</div>
+      </div>
+    </div>
+    <div class="form-row"><label class="form-label">細項說明</label><input class="form-input" id="desc-input" placeholder="例：lawson 飯糰"></div>
+    <div class="form-row"><label class="form-label">幣別</label><div class="chip-group" id="cur-chips">${curs}</div></div>
+    <div class="form-row">
+      <label class="form-label">金額</label>
+      <input class="form-input" id="amount-input" type="number" placeholder="0" min="0" oninput="calcConverted()" style="font-family:'DM Mono',monospace">
+      <input class="form-input" id="rate-input" type="number" placeholder="匯率（1外幣=?台幣）" min="0" step="0.001" oninput="calcConverted()" style="font-family:'DM Mono',monospace;margin-top:8px;display:${isTrip&&tripMainCur!=='TWD'?'block':'none'}">
+      <div class="rate-hint" id="rate-hint" style="display:${isTrip&&tripMainCur!=='TWD'?'block':'none'}">${isTrip&&tripMainCur!=='TWD'?'參考匯率（1 '+tripMainCur+' = ? TWD，可修改）':''}</div>
+      <div class="converted-amount" id="converted-amount"></div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">分攤方式</label>
+      <div class="chip-group" id="split-chips">
+        <div class="chip active-split" data-split="even" onclick="selectSplit(this)">均分</div>
+        <div class="chip" data-split="him" onclick="selectSplit(this)" id="split-him-chip">全算${him}</div>
+        <div class="chip" data-split="her" onclick="selectSplit(this)">全算我</div>
+        <div class="chip" data-split="custom" onclick="selectSplit(this)">自訂</div>
+        <div class="chip" data-split="self" onclick="selectSplit(this)">我自己</div>
+      </div>
+      <div class="split-custom-row" id="split-custom-row">
+        <div><label class="form-label" id="custom-her-label">${her} 負擔</label><input class="form-input" id="custom-her" type="number" placeholder="0" oninput="updateCustomSplit('her')" style="font-family:'DM Mono',monospace"></div>
+        <div><label class="form-label" id="custom-him-label">${him} 負擔</label><input class="form-input" id="custom-him" type="number" placeholder="0" oninput="updateCustomSplit('him')" style="font-family:'DM Mono',monospace"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">誰付的</label>
+      <div class="chip-group" id="payer-chips">
+        <div class="chip active-her" data-payer="her" onclick="selectPayer(this)" id="payer-her-chip">👩 ${her}</div>
+        <div class="chip" data-payer="him" onclick="selectPayer(this)" id="payer-him-chip">👨 ${him}</div>
+      </div>
+    </div>
+    <div class="form-row"><label class="form-label">日期</label><input class="form-input" id="date-input" type="date"></div>
+    <button class="btn-submit" id="btn-add-submit" onclick="addExpense()">記帳 ✓</button>
+  `;
+  // set default rate
+  if (isTrip && tripMainCur !== 'TWD') {
+    formState.currency = tripMainCur;
+    const refs = { JPY:0.213, USD:32.5 };
+    document.getElementById('rate-input').value = refs[tripMainCur]||'';
+  }
+}
+
+window.openAddModal = () => {
+  formState = { cat:null, currency:'TWD', split:'even', payer:'her' };
+  const isTrip = currentTripId !== null;
+  const trip = isTrip ? state.trips.find(t=>t.id===currentTripId) : null;
+  buildExpenseForm(isTrip, trip?.mainCur||'TWD');
+  document.getElementById('date-input').value = today();
+  openModal('modal-add');
+};
+
+// ── Chips ─────────────────────────────────────────────────
+window.selectCat = (el) => {
+  document.querySelectorAll('#cat-chips .chip').forEach(c=>c.classList.remove('active-cat'));
+  el.classList.add('active-cat'); formState.cat=el.dataset.cat;
+};
+window.selectCur = (el) => {
+  document.querySelectorAll('#cur-chips .chip').forEach(c=>c.classList.remove('active-cur'));
+  el.classList.add('active-cur'); formState.currency=el.dataset.cur;
+  const isForeign = formState.currency!=='TWD';
+  document.getElementById('rate-input').style.display = isForeign?'block':'none';
+  document.getElementById('rate-hint').style.display = isForeign?'block':'none';
+  if (isForeign) {
+    const refs={JPY:0.213,USD:32.5};
+    document.getElementById('rate-input').value = refs[formState.currency]||'';
+    document.getElementById('rate-hint').textContent='參考匯率（1 '+formState.currency+' = ? TWD，可修改）';
+  } else { document.getElementById('converted-amount').textContent=''; }
+  calcConverted();
+};
+window.selectSplit = (el) => {
+  document.querySelectorAll('#split-chips .chip').forEach(c=>c.classList.remove('active-her','active-him','active-split','active-self'));
+  const map={her:'active-her',him:'active-him',even:'active-split',custom:'active-split',self:'active-self'};
+  el.classList.add(map[el.dataset.split]); formState.split=el.dataset.split;
+  document.getElementById('split-custom-row').classList.toggle('show', formState.split==='custom');
+  if (formState.split==='custom') prefillCustomSplit();
+};
+window.selectPayer = (el) => {
+  document.querySelectorAll('#payer-chips .chip').forEach(c=>c.classList.remove('active-her','active-him'));
+  el.classList.add(el.dataset.payer==='her'?'active-her':'active-him'); formState.payer=el.dataset.payer;
+};
+window.selectTripCur = (el) => {
+  document.querySelectorAll('#trip-cur-chips .chip').forEach(c=>c.classList.remove('active-ink'));
+  el.classList.add('active-ink'); newTripCur=el.dataset.cur;
+};
+
+// ── Currency ──────────────────────────────────────────────
+window.calcConverted = () => {
+  if (formState.currency==='TWD'){document.getElementById('converted-amount').textContent='';return;}
+  const amt=parseFloat(document.getElementById('amount-input').value)||0;
+  const rate=parseFloat(document.getElementById('rate-input').value)||0;
+  if(amt&&rate) document.getElementById('converted-amount').textContent='≈ TWD '+Math.round(amt*rate).toLocaleString();
+};
+function prefillCustomSplit(){
+  const amt=twdAmount(); if(!amt) return;
+  document.getElementById('custom-her').value=Math.round(amt/2);
+  document.getElementById('custom-him').value=amt-Math.round(amt/2);
+}
+window.updateCustomSplit=(changed)=>{
+  const total=twdAmount(); if(!total) return;
+  if(changed==='her') document.getElementById('custom-him').value=Math.max(0,total-(parseFloat(document.getElementById('custom-her').value)||0));
+  else document.getElementById('custom-her').value=Math.max(0,total-(parseFloat(document.getElementById('custom-him').value)||0));
+};
+function twdAmount(){
+  const amt=parseFloat(document.getElementById('amount-input').value)||0;
+  if(formState.currency==='TWD') return amt;
+  return Math.round(amt*(parseFloat(document.getElementById('rate-input').value)||1));
+}
+
+// ── Add Expense ───────────────────────────────────────────
+window.addExpense = async () => {
+  const desc=document.getElementById('desc-input').value.trim();
+  const amount=parseFloat(document.getElementById('amount-input').value);
+  const date=document.getElementById('date-input').value;
+  if(!formState.cat){showToast('請選擇類別');return;}
+  if(!desc){showToast('請填寫細項說明');return;}
+  if(!amount||amount<=0){showToast('請填寫金額');return;}
+  if(!date){showToast('請選擇日期');return;}
+  const twd=twdAmount();
+  const rate=formState.currency!=='TWD'?(parseFloat(document.getElementById('rate-input').value)||1):1;
+  let herOwes=0,himOwes=0;
+  if(formState.split==='even'){herOwes=twd/2;himOwes=twd/2;}
+  else if(formState.split==='him'){himOwes=twd;}
+  else if(formState.split==='her'||formState.split==='self'){herOwes=twd;}
+  else if(formState.split==='custom'){
+    herOwes=parseFloat(document.getElementById('custom-her').value)||0;
+    himOwes=parseFloat(document.getElementById('custom-him').value)||0;
+  }
+  const data={cat:formState.cat,desc,amount,currency:formState.currency,rate,twd,payer:formState.payer,split:formState.split,herOwes,himOwes,date,createdAt:Date.now()};
+  setBusy('btn-add-submit',true,'記帳中…');
+  try {
+    if (currentTripId) {
+      await addDoc(collection(db,'users',currentUser.uid,'trips',currentTripId,'expenses'),data);
+    } else {
+      await addDoc(collection(db,'users',currentUser.uid,'expenses'),data);
+    }
+    closeModal('modal-add'); showToast('已記帳 ✓');
+  } catch(e){showToast('儲存失敗');}
+  setBusy('btn-add-submit',false,'記帳 ✓');
+};
+
+// ── Deposit ───────────────────────────────────────────────
+window.openDepositModal = () => {
+  document.getElementById('deposit-input').value='';
+  document.getElementById('deposit-date').value=today();
+  document.getElementById('deposit-note').value='';
+  openModal('modal-deposit');
+};
+window.addDeposit = async () => {
+  const amount=parseFloat(document.getElementById('deposit-input').value);
+  const note=document.getElementById('deposit-note').value.trim();
+  const date=document.getElementById('deposit-date').value;
+  if(!amount||amount<=0){showToast('請填寫金額');return;}
+  if(!date){showToast('請選擇日期');return;}
+  setBusy('btn-deposit-submit',true,'儲存中…');
+  try {
+    await addDoc(collection(db,'users',currentUser.uid,'deposits'),{amount,note,date,createdAt:Date.now()});
+    closeModal('modal-deposit'); showToast('儲值成功 ✓');
+  } catch(e){showToast('儲存失敗');}
+  setBusy('btn-deposit-submit',false,'儲值 ✓');
+};
+window.deleteDeposit = async (id) => {
+  if(!confirm('確定刪除此儲值紀錄？')) return;
+  await deleteDoc(doc(db,'users',currentUser.uid,'deposits',id));
+};
+
+// ── Settle (daily) ────────────────────────────────────────
+window.showSettle = () => { renderSettleModal(); openModal('modal-settle'); };
+function renderSettleModal(){
+  const {diff}=calcBalance();
+  const her=state.settings.herName,him=state.settings.himName;
+  const el=document.getElementById('settle-status-display');
+  if(Math.abs(diff)<1){el.innerHTML=`<div style="text-align:center;padding:12px;color:var(--green);font-weight:600">✓ 目前不需要還款</div>`;}
+  else if(diff>0){el.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${him} 需還給 ${her}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--him)">$${Math.round(diff).toLocaleString()}</div></div>`;document.getElementById('settle-amount-input').placeholder=Math.round(diff);}
+  else{const owe=Math.abs(diff);el.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${her} 需還給 ${him}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--her)">$${Math.round(owe).toLocaleString()}</div></div>`;document.getElementById('settle-amount-input').placeholder=Math.round(owe);}
+  const histEl=document.getElementById('settle-history-list');
+  if(state.settlements.length===0){histEl.innerHTML=`<div style="text-align:center;padding:24px;color:var(--ink-light);font-size:.82rem">還沒有還款紀錄</div>`;}
+  else{histEl.innerHTML=state.settlements.map(s=>`<div class="settle-item"><div class="settle-dot"></div><div class="settle-info"><div class="s-desc">${s.note||'還款'}</div><div class="s-date">${s.date}</div></div><div class="settle-amount">$${s.amount.toLocaleString()}</div><button class="settle-del" onclick="deleteSettle('${s.id}')">✕</button></div>`).join('');}
+}
+window.doSettle = async () => {
+  const amount=parseFloat(document.getElementById('settle-amount-input').value);
+  const note=document.getElementById('settle-note-input').value.trim();
+  if(!amount||amount<=0){showToast('請填寫還款金額');return;}
+  try{await addDoc(collection(db,'users',currentUser.uid,'settlements'),{amount,note,date:today(),createdAt:Date.now()});document.getElementById('settle-amount-input').value='';document.getElementById('settle-note-input').value='';showToast('還款已記錄 ✓');renderSettleModal();}catch(e){showToast('儲存失敗');}
+};
+window.deleteSettle = async (id) => {
+  if(!confirm('確定刪除？')) return;
+  await deleteDoc(doc(db,'users',currentUser.uid,'settlements',id)); renderSettleModal();
+};
+
+// ── Trips ─────────────────────────────────────────────────
+window.openNewTripModal = () => {
+  document.getElementById('trip-name-input').value='';
+  document.getElementById('trip-start-input').value='';
+  document.getElementById('trip-end-input').value='';
+  document.getElementById('trip-budget-input').value='';
+  newTripCur='JPY';
+  document.querySelectorAll('#trip-cur-chips .chip').forEach(c=>{c.classList.remove('active-ink');if(c.dataset.cur==='JPY')c.classList.add('active-ink');});
+  openModal('modal-new-trip');
+};
+window.createTrip = async () => {
+  const name=document.getElementById('trip-name-input').value.trim();
+  const startDate=document.getElementById('trip-start-input').value;
+  const endDate=document.getElementById('trip-end-input').value;
+  const budget=parseFloat(document.getElementById('trip-budget-input').value)||0;
+  if(!name){showToast('請填寫行程名稱');return;}
+  if(!startDate){showToast('請填寫出發日期');return;}
+  setBusy('btn-new-trip-submit',true,'建立中…');
+  try{
+    await addDoc(collection(db,'users',currentUser.uid,'trips'),{name,startDate,endDate,mainCur:newTripCur,budget,archived:false,createdAt:Date.now()});
+    closeModal('modal-new-trip'); showToast('行程建立成功 ✓');
+  }catch(e){showToast('建立失敗');}
+  setBusy('btn-new-trip-submit',false,'建立行程 ✓');
+};
+window.editTripBudget = async (tripId) => {
+  const trip=state.trips.find(t=>t.id===tripId); if(!trip) return;
+  const val=prompt('設定總預算（台幣）', trip.budget||'');
+  if(val===null) return;
+  const budget=parseFloat(val)||0;
+  await updateDoc(doc(db,'users',currentUser.uid,'trips',tripId),{budget});
+  showToast('預算已更新 ✓');
+};
+
+window.openTrip = (tripId) => {
+  currentTripId=tripId; tripCurFilter=null; tripTabActive='list';
+  switchPage('trip-detail');
+  renderTripDetail();
+};
+
+window.backToTripList = () => { currentTripId=null; switchPage('travel'); };
+
+window.switchTripTab = (tab) => {
+  tripTabActive=tab;
+  ['list','stats','settle'].forEach(t=>{
+    document.getElementById('trip-'+t+'-panel').style.display=t===tab?'block':'none';
+    document.getElementById('trip-tab-'+t).className='chip'+(t===tab?' active-ink':'');
+  });
+  if(tab==='stats') renderTripStats();
+  if(tab==='settle') renderTripSettle();
+};
+
+function renderTravelList(){
+  const trips=state.trips;
+  const listEl=document.getElementById('trip-list');
+  document.getElementById('trip-list-label').textContent=`行程（${trips.length} 個）`;
+  if(trips.length===0){listEl.innerHTML=`<div class="empty-state"><div class="e-icon">✈️</div><div class="e-text">還沒有旅遊行程<br>點右上角新增</div></div>`;document.getElementById('cross-compare').innerHTML='';return;}
+  listEl.innerHTML=trips.map(trip=>{
+    const exps=state.tripExpenses[trip.id]||[];
+    const total=exps.reduce((s,e)=>s+e.twd,0);
+    const herPaid=exps.filter(e=>e.payer==='her').reduce((s,e)=>s+e.twd,0);
+    const himPaid=exps.filter(e=>e.payer==='him').reduce((s,e)=>s+e.twd,0);
+    return `<div class="trip-card" onclick="openTrip('${trip.id}')">
+      <div class="trip-stripe"></div>
+      <div class="trip-card-inner">
+        <div class="trip-card-top">
+          <div class="trip-name">${trip.name}</div>
+          <div class="trip-status ${trip.archived?'archived':'active'}">${trip.archived?'已封存':'進行中'}</div>
+        </div>
+        <div class="trip-dates">${trip.startDate}${trip.endDate?' → '+trip.endDate:''} · ${trip.mainCur}</div>
+        <div class="trip-summary">
+          <div class="trip-stat"><div class="ts-val">$${Math.round(total).toLocaleString()}</div><div class="ts-label">總花費</div></div>
+          <div class="trip-stat"><div class="ts-val">${exps.length}</div><div class="ts-label">筆數</div></div>
+          <div class="trip-stat"><div class="ts-val">$${Math.round(herPaid).toLocaleString()}</div><div class="ts-label">${state.settings.herName}</div></div>
+          <div class="trip-stat"><div class="ts-val">$${Math.round(himPaid).toLocaleString()}</div><div class="ts-label">${state.settings.himName}</div></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Cross compare
+  const compareEl=document.getElementById('cross-compare');
+  const cats=['食','住','行','購物','樂','其他'];
+  const catColors={'食':'#f97316','住':'#3b82f6','行':'#10b981','購物':'#ec4899','樂':'#8b5cf6','其他':'#94a3b8'};
+  compareEl.innerHTML=`
+    <div class="compare-card">
+      <div class="stats-section-title" style="padding:14px 16px 10px;font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);border-bottom:1px solid var(--border)">各次旅遊總花費</div>
+      ${trips.map(trip=>{
+        const total=(state.tripExpenses[trip.id]||[]).reduce((s,e)=>s+e.twd,0);
+        return `<div class="compare-row">
+          <div><div class="compare-trip-name">${trip.name}</div><div class="compare-trip-date">${trip.startDate}</div></div>
+          <div class="compare-amount">$${Math.round(total).toLocaleString()}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="compare-card" style="margin-top:0">
+      <div class="stats-section-title" style="padding:14px 16px 10px;font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);border-bottom:1px solid var(--border)">各次旅遊類別分布</div>
+      ${cats.map(cat=>{
+        const vals=trips.map(trip=>({name:trip.name,val:(state.tripExpenses[trip.id]||[]).filter(e=>e.cat===cat).reduce((s,e)=>s+e.twd,0)})).filter(v=>v.val>0);
+        if(!vals.length) return '';
+        return `<div class="compare-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${catColors[cat]};flex-shrink:0"></div><div style="font-size:.82rem;font-weight:600">${cat}</div></div>
+          ${vals.map(v=>`<div style="display:flex;justify-content:space-between;width:100%;font-size:.75rem;color:var(--ink-mid);padding-left:16px"><span>${v.name}</span><span style="font-family:'DM Mono',monospace">$${Math.round(v.val).toLocaleString()}</span></div>`).join('')}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderTripDetail(){
+  const trip=state.trips.find(t=>t.id===currentTripId); if(!trip) return;
+  const exps=state.tripExpenses[currentTripId]||[];
+  const her=state.settings.herName,him=state.settings.himName;
+
+  document.getElementById('trip-detail-name').textContent=trip.name;
+  document.getElementById('trip-detail-dates').textContent=(trip.startDate||'')+(trip.endDate?' → '+trip.endDate:'')+'  ·  '+trip.mainCur;
+  document.getElementById('trip-her-label').textContent=her;
+  document.getElementById('trip-him-label').textContent=him;
+
+  const total=exps.reduce((s,e)=>s+e.twd,0);
+  const herPaid=exps.filter(e=>e.payer==='her').reduce((s,e)=>s+e.twd,0);
+  const himPaid=exps.filter(e=>e.payer==='him').reduce((s,e)=>s+e.twd,0);
+  document.getElementById('trip-total-twd').textContent='$'+Math.round(total).toLocaleString();
+  document.getElementById('trip-her-paid').textContent='$'+Math.round(herPaid).toLocaleString();
+  document.getElementById('trip-him-paid').textContent='$'+Math.round(himPaid).toLocaleString();
+  document.getElementById('trip-count').textContent=exps.length+' 筆';
+
+  // day indicator
+  if(trip.startDate){
+    const start=new Date(trip.startDate);
+    const today2=new Date();
+    const diffDays=Math.floor((today2-start)/(1000*60*60*24))+1;
+    const end=trip.endDate?new Date(trip.endDate):null;
+    const totalDays=end?Math.floor((end-start)/(1000*60*60*24))+1:null;
+    if(diffDays>=1&&(!end||today2<=end)){
+      document.getElementById('trip-day-indicator').textContent='📅 今天是第 '+diffDays+(totalDays?' / '+totalDays:'')+' 天';
+    } else { document.getElementById('trip-day-indicator').textContent=''; }
+  }
+
+  // budget block
+  renderTripBudget(trip, exps);
+
+  // archive button
+  const archRow=document.getElementById('trip-archive-row');
+  if(!trip.archived){
+    archRow.innerHTML=`<button onclick="archiveTrip('${trip.id}')" style="width:100%;padding:12px;background:none;border:1.5px solid var(--border);border-radius:10px;font-size:.82rem;font-family:'Noto Sans TC',sans-serif;color:var(--ink-mid);cursor:pointer">封存此行程</button>`;
+  } else {
+    archRow.innerHTML=`<div style="text-align:center;font-size:.75rem;color:var(--ink-light);font-family:'DM Mono',monospace">已封存</div>`;
+  }
+
+  // day filter
+  const days=[...new Set(exps.map(e=>e.date))].sort().reverse();
+  const dayScroller=document.getElementById('trip-day-scroller');
+  dayScroller.innerHTML=days.length===0?'':
+    `<div class="month-chip ${!tripCurFilter?'active':''}" onclick="setTripDayFilter(null)">全部</div>`+
+    days.map(d=>`<div class="month-chip ${tripCurFilter===d?'active':''}" onclick="setTripDayFilter('${d}')">${d.slice(5)}</div>`).join('');
+
+  // expense list
+  const filtered=tripCurFilter?exps.filter(e=>e.date===tripCurFilter):exps;
+  document.getElementById('trip-expense-count').textContent=`紀錄（${filtered.length} 筆）`;
+  const listEl=document.getElementById('trip-expense-list');
+  const splitColors={even:'#059669',him:'#1d4ed8',her:'#b45309',custom:'#7c3aed',self:'#7c3aed'};
+  const splitTagClass={even:'tag-split',him:'tag-him',her:'tag-her',custom:'tag-self',self:'tag-self'};
+  const splitLabel=(e)=>{
+    if(e.split==='even') return '均分';
+    if(e.split==='him') return '全算'+him;
+    if(e.split==='her') return '全算'+her;
+    if(e.split==='custom') return her+' '+Math.round(e.herOwes)+' / '+him+' '+Math.round(e.himOwes);
+    if(e.split==='self') return '我自己';
+    return '';
+  };
+  if(filtered.length===0){listEl.innerHTML=`<div class="empty-state"><div class="e-icon">📒</div><div class="e-text">還沒有紀錄</div></div>`;return;}
+  listEl.innerHTML=filtered.map(e=>`
+    <div class="expense-card">
+      <div class="e-stripe" style="background:${splitColors[e.split]||'#ccc'}"></div>
+      <div class="e-cat">${e.cat} · ${e.date}</div><div></div>
+      <div class="e-desc">${e.desc}</div>
+      <div class="e-right">
+        <div class="e-amount">${e.currency!=='TWD'?e.amount.toLocaleString()+' '+e.currency+'<br><span style="font-size:.78rem;color:var(--ink-mid)">≈ </span>':''}$${Math.round(e.twd).toLocaleString()}</div>
+        <div class="e-split-tag ${splitTagClass[e.split]}">${splitLabel(e)}</div>
+      </div>
+      <div class="e-meta">由 ${e.payer==='her'?her:him} 付款</div>
+      <button class="e-delete" onclick="deleteTripExpense('${e.id}')">✕</button>
+    </div>`).join('');
+
+  if(tripTabActive==='stats') renderTripStats();
+  if(tripTabActive==='settle') renderTripSettle();
+}
+
+window.setTripDayFilter=(d)=>{tripCurFilter=d;renderTripDetail();};
+
+function renderTripBudget(trip, exps){
+  const blockEl=document.getElementById('trip-budget-block');
+  if(!trip.budget || trip.budget<=0){
+    blockEl.innerHTML=`<div style="background:var(--surface);border:1px dashed var(--border);border-radius:12px;padding:14px;text-align:center">
+      <span style="font-size:.78rem;color:var(--ink-light)">尚未設定預算</span>
+      <button onclick="editTripBudget('${trip.id}')" style="margin-left:8px;padding:5px 12px;background:var(--travel);color:#fff;border:none;border-radius:8px;font-size:.72rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer">設定預算</button>
+    </div>`;
+    return;
+  }
+
+  const fixedTotal=exps.filter(e=>e.cat==='住'||e.cat==='行').reduce((s,e)=>s+e.twd,0);
+  const flexTotal=exps.filter(e=>e.cat!=='住'&&e.cat!=='行').reduce((s,e)=>s+e.twd,0);
+  const grandTotal=fixedTotal+flexTotal;
+  const remaining=trip.budget-grandTotal;
+  const flexBudget=trip.budget-fixedTotal; // 扣掉固定支出後，彈性可花總額
+  const flexRemaining=flexBudget-flexTotal;
+
+  // 剩餘天數：只在行程期間內才算（出發後）
+  let dayInfo='';
+  let perDayRemaining=null;
+  if(trip.startDate && trip.endDate){
+    const start=new Date(trip.startDate);
+    const end=new Date(trip.endDate);
+    const now=new Date();
+    const todayMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    if(todayMidnight>=start && todayMidnight<=end){
+      const daysLeft=Math.floor((end-todayMidnight)/(1000*60*60*24))+1; // 含今天
+      perDayRemaining=flexRemaining/daysLeft;
+      dayInfo=`剩 ${daysLeft} 天`;
+    } else if(todayMidnight<start){
+      dayInfo='尚未出發';
+    } else {
+      dayInfo='已結束';
+    }
+  }
+
+  const pct=Math.min(100,Math.round(grandTotal/trip.budget*100));
+  const overBudget=remaining<0;
+
+  blockEl.innerHTML=`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">預算</span>
+        <span onclick="editTripBudget('${trip.id}')" style="font-size:.7rem;color:var(--ink-light);text-decoration:underline;cursor:pointer">編輯</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-family:'DM Mono',monospace;font-size:1.3rem;font-weight:600;color:${overBudget?'var(--red)':'var(--ink)'}">$${Math.round(grandTotal).toLocaleString()}</span>
+        <span style="font-size:.78rem;color:var(--ink-light);font-family:'DM Mono',monospace">/ $${trip.budget.toLocaleString()}</span>
+      </div>
+      <div style="height:6px;background:var(--border);border-radius:99px;overflow:hidden;margin-bottom:10px">
+        <div style="height:100%;width:${pct}%;background:${overBudget?'var(--red)':'var(--travel)'};transition:width .3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink-mid);margin-bottom:${perDayRemaining!==null?'10px':'0'}">
+        <span>固定支出（住+行）$${Math.round(fixedTotal).toLocaleString()}</span>
+        <span>${overBudget?'超支':'剩餘'} $${Math.abs(Math.round(remaining)).toLocaleString()}</span>
+      </div>
+      ${perDayRemaining!==null?`
+      <div style="border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:.75rem;color:var(--ink-mid)">彈性預算每日可花（${dayInfo}）</span>
+        <span style="font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;color:${perDayRemaining<0?'var(--red)':'var(--green)'}">$${Math.round(perDayRemaining).toLocaleString()}</span>
+      </div>`:dayInfo?`<div style="font-size:.72rem;color:var(--ink-light);text-align:center;margin-top:4px">${dayInfo}</div>`:''}
+    </div>`;
+}
+
+function renderTripStats(){
+  const exps=state.tripExpenses[currentTripId]||[];
+  const cats=['食','住','行','購物','樂','其他'];
+  const catColors={'食':'#f97316','住':'#3b82f6','行':'#10b981','購物':'#ec4899','樂':'#8b5cf6','其他':'#94a3b8'};
+  const catTotals={}; cats.forEach(c=>catTotals[c]=0);
+  let grandTotal=0; const her=state.settings.herName,him=state.settings.himName;
+  let herPaid=0,himPaid=0,selfTotal=0;
+  // 個人「實際花費」= herOwes / himOwes 加總（誰花的，不是誰付的）
+  let herSpent=0,himSpent=0;
+  const herCatTotals={}; const himCatTotals={}; cats.forEach(c=>{herCatTotals[c]=0;himCatTotals[c]=0;});
+  exps.forEach(e=>{
+    catTotals[e.cat]=(catTotals[e.cat]||0)+e.twd;grandTotal+=e.twd;
+    if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;
+    if(e.split==='self')selfTotal+=e.twd;
+    herSpent+=e.herOwes||0; himSpent+=e.himOwes||0;
+    herCatTotals[e.cat]=(herCatTotals[e.cat]||0)+(e.herOwes||0);
+    himCatTotals[e.cat]=(himCatTotals[e.cat]||0)+(e.himOwes||0);
+  });
+  const maxVal=Math.max(...Object.values(catTotals),1);
+  const el=document.getElementById('trip-stats-content');
+  if(exps.length===0){el.innerHTML=`<div class="empty-state"><div class="e-icon">📊</div><div class="e-text">還沒有資料</div></div>`;return;}
+
+  // Top items per person (for "買了什麼")
+  const herTop=exps.filter(e=>(e.herOwes||0)>0).sort((a,b)=>(b.herOwes||0)-(a.herOwes||0)).slice(0,5);
+  const himTop=exps.filter(e=>(e.himOwes||0)>0).sort((a,b)=>(b.himOwes||0)-(a.himOwes||0)).slice(0,5);
+
+  el.innerHTML=`
+    <div class="stats-section">
+      <div class="stats-section-title">兩人各自花費</div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herSpent/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herSpent).toLocaleString()}</div></div>
+      <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himSpent/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himSpent).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">${her} 買了什麼（金額前5）</div>
+      ${herTop.length===0?'<div class="stat-row"><div class="stat-name" style="color:var(--ink-light)">尚無資料</div></div>':herTop.map(e=>`
+        <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[e.cat]}"></div><div class="stat-name">${e.desc}</div><div class="stat-val" style="width:auto">$${Math.round(e.herOwes).toLocaleString()}</div></div>`).join('')}
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">${him} 買了什麼（金額前5）</div>
+      ${himTop.length===0?'<div class="stat-row"><div class="stat-name" style="color:var(--ink-light)">尚無資料</div></div>':himTop.map(e=>`
+        <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[e.cat]}"></div><div class="stat-name">${e.desc}</div><div class="stat-val" style="width:auto">$${Math.round(e.himOwes).toLocaleString()}</div></div>`).join('')}
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">各類別花費（全部）</div>
+      ${cats.filter(c=>catTotals[c]>0).sort((a,b)=>catTotals[b]-catTotals[a]).map(c=>`
+        <div class="stat-row"><div class="stat-cat-dot" style="background:${catColors[c]}"></div><div class="stat-name">${c}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${Math.round(catTotals[c]/maxVal*100)}%;background:${catColors[c]}"></div></div><div class="stat-val">$${Math.round(catTotals[c]).toLocaleString()}</div></div>`).join('')}
+      <div class="stat-row" style="background:var(--bg)"><div class="stat-cat-dot" style="background:var(--ink)"></div><div class="stat-name" style="font-weight:600">總計</div><div class="stat-bar-wrap"></div><div class="stat-val" style="color:var(--ink);font-weight:600">$${Math.round(grandTotal).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">付款分布（誰刷卡付的）</div>
       <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herPaid/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herPaid).toLocaleString()}</div></div>
       <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him} 付出</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himPaid/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himPaid).toLocaleString()}</div></div>
       ${selfTotal>0?`<div class="stat-row"><div class="stat-cat-dot" style="background:var(--self)"></div><div class="stat-name">我自己</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(selfTotal/grandTotal*100):0}%;background:var(--self)"></div></div><div class="stat-val" style="color:var(--self)">$${Math.round(selfTotal).toLocaleString()}</div></div>`:''}
