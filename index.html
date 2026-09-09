@@ -332,12 +332,11 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
     <div id="trip-stats-content"></div>
   </div>
   <div id="trip-settle-panel" style="margin-top:12px;display:none;padding:0 16px 20px">
-    <div id="trip-settle-status" style="margin-bottom:16px"></div>
-    <div class="form-row"><label class="form-label">還款金額</label><input class="form-input" id="trip-settle-amount" type="number" placeholder="0" style="font-family:'DM Mono',monospace"></div>
-    <div class="form-row"><label class="form-label">備註（選填）</label><input class="form-input" id="trip-settle-note" placeholder="例：Line Pay 轉帳"></div>
-    <button class="btn-settle" onclick="doTripSettle()">確認還款 ✓</button>
-    <div style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light);margin-bottom:10px">還款紀錄</div>
-    <div style="background:var(--bg);border-radius:var(--radius);overflow:hidden" id="trip-settle-history"></div>
+    <div style="background:var(--travel-bg);border-radius:var(--radius);padding:16px;text-align:center">
+      <div style="font-size:.85rem;color:var(--travel);margin-bottom:6px">💡 這趟旅遊的欠款已經自動併入日常帳本</div>
+      <div style="font-size:.78rem;color:var(--ink-mid);margin-bottom:14px">不需要在這裡單獨結清，回到「帳本」頁一次結清所有金額即可</div>
+      <button onclick="switchPage('home')" style="padding:10px 20px;background:var(--ink);color:#fff;border:none;border-radius:10px;font-size:.82rem;font-family:'Noto Sans TC',sans-serif;font-weight:600;cursor:pointer">前往帳本結清 →</button>
+    </div>
   </div>
   <!-- archive button -->
   <div style="padding:16px;margin-top:8px" id="trip-archive-row"></div>
@@ -613,6 +612,7 @@ function subscribeData() {
   unsubs.push(onSnapshot(query(collection(db,'users',uid,'trips'),orderBy('startDate','desc')), snap => {
     state.trips = snap.docs.map(d=>({id:d.id,...d.data()}));
     loaded.t=true; checkReady(); renderTravelList();
+    if (currentTripId) renderTripDetail();
     // subscribe trip expenses & settlements
     state.trips.forEach(trip => {
       if (!state.tripExpenses[trip.id]) {
@@ -901,6 +901,7 @@ window.editTripBudget = async (tripId) => {
   const budgetHim=parseFloat(valHim)||0;
   await updateDoc(doc(db,'users',currentUser.uid,'trips',tripId),{budgetHer,budgetHim});
   showToast('預算已更新 ✓');
+  renderTripDetail();
 };
 
 window.openTrip = (tripId) => {
@@ -1201,35 +1202,10 @@ function renderTripStats(){
 }
 
 function renderTripSettle(){
-  const exps=state.tripExpenses[currentTripId]||[];
-  const settles=state.tripSettlements[currentTripId]||[];
-  const her=state.settings.herName,him=state.settings.himName;
-  let himOwesTotal=0,himPaid=0;
-  exps.forEach(e=>{himOwesTotal+=e.himOwes||0;if(e.payer==='him')himPaid+=e.twd;});
-  let diff=himOwesTotal-himPaid;
-  settles.forEach(s=>{diff-=s.amount;});
-  const statusEl=document.getElementById('trip-settle-status');
-  if(Math.abs(diff)<1){statusEl.innerHTML=`<div style="text-align:center;padding:12px;color:var(--green);font-weight:600">✓ 此趟旅遊不需還款</div>`;}
-  else if(diff>0){statusEl.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${him} 需還給 ${her}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--him)">$${Math.round(diff).toLocaleString()}</div></div>`;document.getElementById('trip-settle-amount').placeholder=Math.round(diff);}
-  else{const owe=Math.abs(diff);statusEl.innerHTML=`<div style="text-align:center;padding:12px 0"><div style="font-size:.8rem;color:var(--ink-mid);margin-bottom:4px">${her} 需還給 ${him}</div><div style="font-family:'DM Mono',monospace;font-size:2rem;font-weight:500;color:var(--her)">$${Math.round(owe).toLocaleString()}</div></div>`;document.getElementById('trip-settle-amount').placeholder=Math.round(owe);}
-  const histEl=document.getElementById('trip-settle-history');
-  if(settles.length===0){histEl.innerHTML=`<div style="text-align:center;padding:24px;color:var(--ink-light);font-size:.82rem">還沒有還款紀錄</div>`;}
-  else{histEl.innerHTML=settles.map(s=>`<div class="settle-item"><div class="settle-dot"></div><div class="settle-info"><div class="s-desc">${s.note||'還款'}</div><div class="s-date">${s.date}</div></div><div class="settle-amount">$${s.amount.toLocaleString()}</div><button class="settle-del" onclick="deleteTripSettle('${s.id}')">✕</button></div>`).join('');}
+function renderTripSettle(){
+  // 旅遊帳本不再單獨結清，欠款已併入日常帳本總結清（見 calcBalance）
 }
 
-window.doTripSettle = async () => {
-  const amount=parseFloat(document.getElementById('trip-settle-amount').value);
-  const note=document.getElementById('trip-settle-note').value.trim();
-  if(!amount||amount<=0){showToast('請填寫還款金額');return;}
-  await addDoc(collection(db,'users',currentUser.uid,'trips',currentTripId,'settlements'),{amount,note,date:today(),createdAt:Date.now()});
-  document.getElementById('trip-settle-amount').value='';
-  document.getElementById('trip-settle-note').value='';
-  showToast('還款已記錄 ✓');
-};
-window.deleteTripSettle = async (id) => {
-  if(!confirm('確定刪除？')) return;
-  await deleteDoc(doc(db,'users',currentUser.uid,'trips',currentTripId,'settlements',id));
-};
 window.deleteTripExpense = async (id) => {
   if(!confirm('確定刪除這筆？')) return;
   await deleteDoc(doc(db,'users',currentUser.uid,'trips',currentTripId,'expenses',id));
@@ -1246,14 +1222,25 @@ function calcBalance(){
   state.expenses.forEach(e=>{if(e.payer==='her')herPaid+=e.twd;else himPaid+=e.twd;himOwesTotal+=e.himOwes||0;});
   let totalDeposit=0;
   state.deposits.forEach(d=>{totalDeposit+=d.amount;});
+
+  // 旅遊帳本：把每趟行程「他應付-他實付」也併入總欠款（不含旅遊自己的 settlements，因為旅遊不單獨結清）
+  let tripHimOwesTotal=0, tripHimPaid=0;
+  state.trips.forEach(trip=>{
+    const exps=state.tripExpenses[trip.id]||[];
+    exps.forEach(e=>{
+      tripHimOwesTotal+=e.himOwes||0;
+      if(e.payer==='him') tripHimPaid+=e.twd;
+    });
+  });
+
   // 正數 = 他還欠你；負數 = 他多給你（你手上還有他的錢）
-  // 他應付 - 他實際付 - 他的預付金 + 已還款抵消
-  let diff=himOwesTotal-himPaid-totalDeposit;
+  let diff=(himOwesTotal+tripHimOwesTotal)-(himPaid+tripHimPaid)-totalDeposit;
   state.settlements.forEach(s=>{diff+=s.amount;});
-  // 預付金餘額：他給的錢 - 你實際花掉的（你付出的所有）
+  // 預付金餘額：他給的錢 - 你實際花掉的（日常，旅遊預付金另計，不混入這裡）
   const depositBalance=totalDeposit-herPaid;
   return{herPaid,himPaid,total:herPaid+himPaid,diff,depositBalance,totalDeposit};
 }
+
 
 // ── Render (daily) ────────────────────────────────────────
 let activeMonthFilter2=null;
