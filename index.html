@@ -472,8 +472,11 @@ body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--ink)
         </div>
       </div>
       <div class="form-row">
-        <label class="form-label">總預算（台幣，選填）</label>
-        <input class="form-input" id="trip-budget-input" type="number" placeholder="例：150000" style="font-family:'DM Mono',monospace">
+        <label class="form-label">各自預算（台幣，選填）</label>
+        <div class="form-row-2">
+          <input class="form-input" id="trip-budget-her-input" type="number" placeholder="佩璽預算" style="font-family:'DM Mono',monospace">
+          <input class="form-input" id="trip-budget-him-input" type="number" placeholder="惟竣預算" style="font-family:'DM Mono',monospace">
+        </div>
       </div>
       <button class="btn-submit" id="btn-new-trip-submit" onclick="createTrip()">建立行程 ✓</button>
     </div>
@@ -866,7 +869,8 @@ window.openNewTripModal = () => {
   document.getElementById('trip-name-input').value='';
   document.getElementById('trip-start-input').value='';
   document.getElementById('trip-end-input').value='';
-  document.getElementById('trip-budget-input').value='';
+  document.getElementById('trip-budget-her-input').value='';
+  document.getElementById('trip-budget-him-input').value='';
   newTripCur='JPY';
   document.querySelectorAll('#trip-cur-chips .chip').forEach(c=>{c.classList.remove('active-ink');if(c.dataset.cur==='JPY')c.classList.add('active-ink');});
   openModal('modal-new-trip');
@@ -875,22 +879,27 @@ window.createTrip = async () => {
   const name=document.getElementById('trip-name-input').value.trim();
   const startDate=document.getElementById('trip-start-input').value;
   const endDate=document.getElementById('trip-end-input').value;
-  const budget=parseFloat(document.getElementById('trip-budget-input').value)||0;
+  const budgetHer=parseFloat(document.getElementById('trip-budget-her-input').value)||0;
+  const budgetHim=parseFloat(document.getElementById('trip-budget-him-input').value)||0;
   if(!name){showToast('請填寫行程名稱');return;}
   if(!startDate){showToast('請填寫出發日期');return;}
   setBusy('btn-new-trip-submit',true,'建立中…');
   try{
-    await addDoc(collection(db,'users',currentUser.uid,'trips'),{name,startDate,endDate,mainCur:newTripCur,budget,archived:false,createdAt:Date.now()});
+    await addDoc(collection(db,'users',currentUser.uid,'trips'),{name,startDate,endDate,mainCur:newTripCur,budgetHer,budgetHim,archived:false,createdAt:Date.now()});
     closeModal('modal-new-trip'); showToast('行程建立成功 ✓');
   }catch(e){showToast('建立失敗');}
   setBusy('btn-new-trip-submit',false,'建立行程 ✓');
 };
 window.editTripBudget = async (tripId) => {
   const trip=state.trips.find(t=>t.id===tripId); if(!trip) return;
-  const val=prompt('設定總預算（台幣）', trip.budget||'');
-  if(val===null) return;
-  const budget=parseFloat(val)||0;
-  await updateDoc(doc(db,'users',currentUser.uid,'trips',tripId),{budget});
+  const her=state.settings.herName, him=state.settings.himName;
+  const valHer=prompt(her+' 的預算（台幣）', trip.budgetHer||'');
+  if(valHer===null) return;
+  const valHim=prompt(him+' 的預算（台幣）', trip.budgetHim||'');
+  if(valHim===null) return;
+  const budgetHer=parseFloat(valHer)||0;
+  const budgetHim=parseFloat(valHim)||0;
+  await updateDoc(doc(db,'users',currentUser.uid,'trips',tripId),{budgetHer,budgetHim});
   showToast('預算已更新 ✓');
 };
 
@@ -1052,7 +1061,10 @@ window.setTripDayFilter=(d)=>{tripCurFilter=d;renderTripDetail();};
 
 function renderTripBudget(trip, exps){
   const blockEl=document.getElementById('trip-budget-block');
-  if(!trip.budget || trip.budget<=0){
+  const her=state.settings.herName, him=state.settings.himName;
+  const hasBudget=(trip.budgetHer>0)||(trip.budgetHim>0);
+
+  if(!hasBudget){
     blockEl.innerHTML=`<div style="background:var(--surface);border:1px dashed var(--border);border-radius:12px;padding:14px;text-align:center">
       <span style="font-size:.78rem;color:var(--ink-light)">尚未設定預算</span>
       <button onclick="editTripBudget('${trip.id}')" style="margin-left:8px;padding:5px 12px;background:var(--travel);color:#fff;border:none;border-radius:8px;font-size:.72rem;font-family:'Noto Sans TC',sans-serif;cursor:pointer">設定預算</button>
@@ -1060,24 +1072,16 @@ function renderTripBudget(trip, exps){
     return;
   }
 
-  const fixedTotal=exps.filter(e=>e.cat==='住'||e.cat==='行').reduce((s,e)=>s+e.twd,0);
-  const flexTotal=exps.filter(e=>e.cat!=='住'&&e.cat!=='行').reduce((s,e)=>s+e.twd,0);
-  const grandTotal=fixedTotal+flexTotal;
-  const remaining=trip.budget-grandTotal;
-  const flexBudget=trip.budget-fixedTotal; // 扣掉固定支出後，彈性可花總額
-  const flexRemaining=flexBudget-flexTotal;
-
   // 剩餘天數：只在行程期間內才算（出發後）
   let dayInfo='';
-  let perDayRemaining=null;
+  let daysLeft=null;
   if(trip.startDate && trip.endDate){
     const start=new Date(trip.startDate);
     const end=new Date(trip.endDate);
     const now=new Date();
     const todayMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate());
     if(todayMidnight>=start && todayMidnight<=end){
-      const daysLeft=Math.floor((end-todayMidnight)/(1000*60*60*24))+1; // 含今天
-      perDayRemaining=flexRemaining/daysLeft;
+      daysLeft=Math.floor((end-todayMidnight)/(1000*60*60*24))+1; // 含今天
       dayInfo=`剩 ${daysLeft} 天`;
     } else if(todayMidnight<start){
       dayInfo='尚未出發';
@@ -1086,31 +1090,46 @@ function renderTripBudget(trip, exps){
     }
   }
 
-  const pct=Math.min(100,Math.round(grandTotal/trip.budget*100));
-  const overBudget=remaining<0;
+  function personBlock(name, budget, colorVar){
+    if(!budget || budget<=0){
+      return `<div style="background:var(--bg);border-radius:10px;padding:12px;text-align:center;font-size:.75rem;color:var(--ink-light)">${name} 尚未設定預算</div>`;
+    }
+    const spent=exps.reduce((s,e)=>s+(name===her?(e.herOwes||0):(e.himOwes||0)),0);
+    const fixedSpent=exps.filter(e=>e.cat==='住'||e.cat==='行').reduce((s,e)=>s+(name===her?(e.herOwes||0):(e.himOwes||0)),0);
+    const flexSpent=spent-fixedSpent;
+    const remaining=budget-spent;
+    const flexBudget=budget-fixedSpent;
+    const flexRemaining=flexBudget-flexSpent;
+    const pct=Math.min(100,Math.round(spent/budget*100));
+    const overBudget=remaining<0;
+    const perDay=daysLeft?flexRemaining/daysLeft:null;
+
+    return `<div style="background:var(--bg);border-radius:10px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-size:.78rem;font-weight:600;color:var(${colorVar})">${name}</span>
+        <span style="font-size:.72rem;color:var(--ink-light);font-family:'DM Mono',monospace">$${Math.round(spent).toLocaleString()} / $${budget.toLocaleString()}</span>
+      </div>
+      <div style="height:5px;background:var(--border);border-radius:99px;overflow:hidden;margin-bottom:8px">
+        <div style="height:100%;width:${pct}%;background:${overBudget?'var(--red)':'var('+colorVar+')'};transition:width .3s"></div>
+      </div>
+      <div style="font-size:.7rem;color:var(--ink-mid)">${overBudget?'超支':'剩餘'} $${Math.abs(Math.round(remaining)).toLocaleString()}</div>
+      ${perDay!==null?`<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:.68rem;color:var(--ink-light)">每日可花</span>
+        <span style="font-family:'DM Mono',monospace;font-size:.85rem;font-weight:600;color:${perDay<0?'var(--red)':'var(--green)'}">$${Math.round(perDay).toLocaleString()}</span>
+      </div>`:''}
+    </div>`;
+  }
 
   blockEl.innerHTML=`
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">預算</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:.65rem;font-family:'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-light)">各自預算 ${dayInfo?'· '+dayInfo:''}</span>
         <span onclick="editTripBudget('${trip.id}')" style="font-size:.7rem;color:var(--ink-light);text-decoration:underline;cursor:pointer">編輯</span>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-        <span style="font-family:'DM Mono',monospace;font-size:1.3rem;font-weight:600;color:${overBudget?'var(--red)':'var(--ink)'}">$${Math.round(grandTotal).toLocaleString()}</span>
-        <span style="font-size:.78rem;color:var(--ink-light);font-family:'DM Mono',monospace">/ $${trip.budget.toLocaleString()}</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${personBlock(her, trip.budgetHer, '--her')}
+        ${personBlock(him, trip.budgetHim, '--him')}
       </div>
-      <div style="height:6px;background:var(--border);border-radius:99px;overflow:hidden;margin-bottom:10px">
-        <div style="height:100%;width:${pct}%;background:${overBudget?'var(--red)':'var(--travel)'};transition:width .3s"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink-mid);margin-bottom:${perDayRemaining!==null?'10px':'0'}">
-        <span>固定支出（住+行）$${Math.round(fixedTotal).toLocaleString()}</span>
-        <span>${overBudget?'超支':'剩餘'} $${Math.abs(Math.round(remaining)).toLocaleString()}</span>
-      </div>
-      ${perDayRemaining!==null?`
-      <div style="border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:.75rem;color:var(--ink-mid)">彈性預算每日可花（${dayInfo}）</span>
-        <span style="font-family:'DM Mono',monospace;font-size:1rem;font-weight:600;color:${perDayRemaining<0?'var(--red)':'var(--green)'}">$${Math.round(perDayRemaining).toLocaleString()}</span>
-      </div>`:dayInfo?`<div style="font-size:.72rem;color:var(--ink-light);text-align:center;margin-top:4px">${dayInfo}</div>`:''}
     </div>`;
 }
 
@@ -1145,6 +1164,17 @@ function renderTripStats(){
       <div class="stats-section-title">兩人各自花費</div>
       <div class="stat-row"><div class="stat-cat-dot" style="background:var(--her)"></div><div class="stat-name">${her}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(herSpent/grandTotal*100):0}%;background:var(--her)"></div></div><div class="stat-val" style="color:var(--her)">$${Math.round(herSpent).toLocaleString()}</div></div>
       <div class="stat-row"><div class="stat-cat-dot" style="background:var(--him)"></div><div class="stat-name">${him}</div><div class="stat-bar-wrap"><div class="stat-bar" style="width:${grandTotal?Math.round(himSpent/grandTotal*100):0}%;background:var(--him)"></div></div><div class="stat-val" style="color:var(--him)">$${Math.round(himSpent).toLocaleString()}</div></div>
+    </div>
+    <div class="stats-section">
+      <div class="stats-section-title">各類別花費（${her} vs ${him}）</div>
+      ${cats.filter(c=>(herCatTotals[c]>0)||(himCatTotals[c]>0)).sort((a,b)=>(catTotals[b]||0)-(catTotals[a]||0)).map(c=>`
+        <div class="stat-row" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px"><div class="stat-cat-dot" style="background:${catColors[c]}"></div><div style="font-size:.85rem;font-weight:600">${c}</div></div>
+          <div style="display:flex;gap:10px;padding-left:16px">
+            <div style="flex:1;display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--her)">${her}</span><span style="font-family:'DM Mono',monospace;color:var(--her)">$${Math.round(herCatTotals[c]||0).toLocaleString()}</span></div>
+            <div style="flex:1;display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--him)">${him}</span><span style="font-family:'DM Mono',monospace;color:var(--him)">$${Math.round(himCatTotals[c]||0).toLocaleString()}</span></div>
+          </div>
+        </div>`).join('')}
     </div>
     <div class="stats-section">
       <div class="stats-section-title">${her} 買了什麼（金額前5）</div>
